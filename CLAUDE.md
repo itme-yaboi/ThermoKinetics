@@ -9,6 +9,8 @@ A Julia library for multi-domain thermodynamic modeling built on A. I. Veinik's 
 - Bodies are connected by **conductors** (dissipative transport, possibly with coupled fluxes), **streams** (advection) and **converters** (reversible cross-domain transformation).
 - Adding a new form of motion should mean declaring a new (E, P) pair, not writing a new solver.
 
+The end goal, and the yardstick for every slice, is the intended functionality in DESIGN §0.1: power cycles, transient heat transfer, control-volume and control-mass systems, circuits, mass transfer and other practical thermodynamic simulations, all built from the same few element kinds.
+
 It is used for engineering consulting (thermal and balance-of-plant analysis for fusion systems), so correctness, traceability and loss attribution (where entropy is produced) matter more than raw speed at first.
 
 ## Read before writing code
@@ -44,7 +46,7 @@ DESIGN.md describes the target. STATUS.md and the code say what exists. When the
 ## How to work
 
 1. **Design is approved** (DESIGN.md revision 2, reviewed 2026-10-14). Build in the vertical slices of DESIGN §15. Any change to the design itself (new element kinds, new state representation, a new kind of solver) goes into DESIGN.md and DECISIONS.md and is put to the user for review before it is built.
-2. **Tests first, alongside code.** For each slice, write its tests from `08_validation_cases.md` (§A invariants, then analytic cases B → C → D → E) before the code, then write code until they pass. Every integration test also checks `closure` (energy and entropy balance).
+2. **Tests first, alongside code.** For each slice, write its tests from `08_validation_cases.md` (§A invariants, then analytic cases B → C → D → E) before the code, then write code until they pass. Every integration test also checks `closure` (energy and entropy balance). When a slice delivers a use from DESIGN §0.1, add its **application test** to `test/test_applications.jl` and mark the row.
 3. **Keep `src/` minimal**: only what the current slice needs.
 4. When a book equation and a non-negotiable disagree, the non-negotiable wins. Note the disagreement in `docs/DECISIONS.md`.
 5. **DECISIONS.md is append-only**: one entry per decision, with alternatives considered. Log any deviation from DESIGN.md there. Supersede old entries rather than rewriting them.
@@ -59,9 +61,9 @@ DESIGN.md describes the target. STATUS.md and the code say what exists. When the
 4. Update this file if the working rules changed.
 5. Commit on a feature branch (never directly on `master`/`main`), one commit per slice, with a message that lists what the slice added and its tests. Ask before merging or pushing.
 
-## Existing library (reference only)
+## Background: the author's earlier library
 
-The author has an earlier Julia thermal library (ThermalModeling / TSM). It is a conventional lumped-element code, not generalized the way this one should be. See `docs/EXISTING_LIBRARY.md` for when and how to use it. Short version: **read it only in the review phase of `EXISTING_LIBRARY.md` (not started; the user decides when), never mirror its architecture, and use it only for validated cases, correlations, property wrappers and lessons learned.**
+The author previously built a Julia thermal library (ThermalModeling / TSM), a conventional lumped-element code built on ModelingToolkit. That dependency proved a major and nearly irreversible mistake, which is why this project uses no ModelingToolkit (D-2). The old code is **not** a reference for this project and is not consulted. If a specific piece might help (a heat-transfer or friction correlation, a property wrapper, a validated case for the regression comparison in `08` §F), ask the author rather than looking for it.
 
 ## Source material (only when needed)
 

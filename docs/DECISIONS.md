@@ -213,6 +213,16 @@ Each item lists what was built instead of the design text, and why.
    - **A2** is vacuous (no non-thermal charges). **A4** is trivially 1×1. **A5** is the `ThermalConductance` constructor rejecting G < 0 or NaN. **A7** waits for slice 2.
 9. **`closure` measures from `sol.prob.u0`**, not from the first saved point, so it is correct when `saveat` omits t = 0. This was a bug caught during slice 1; D4 is the regression test.
 
+### D-21 The earlier library is not consulted — accepted (2026-10-14)
+- **Chosen:**
+  - The author's earlier ThermalModeling/TSM library is not read or reviewed.
+  - The review phase in `docs/EXISTING_LIBRARY.md` is dropped.
+  - CLAUDE.md keeps only the background: it was a ModelingToolkit-based lumped-element code, and that dependency was the main lesson (D-2).
+  - Specific pieces (correlations, property wrappers, validated cases for `08` §F) are requested from the author when needed.
+- **Alternatives:** the phased review planned in `EXISTING_LIBRARY.md` (inventory, reuse list, do-not-carry list, mapping table).
+- **Why:** the architecture is settled and shares nothing with the old code. The main architectural lesson is already recorded. Asking for a specific correlation or case costs less than a full review, and it avoids anchoring on the old structure.
+- `docs/EXISTING_LIBRARY.md` stays in the repository as history. Its phase rules no longer apply.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

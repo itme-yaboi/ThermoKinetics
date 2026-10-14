@@ -7,7 +7,7 @@
 - **Phase:** build. DESIGN.md revision 2 is approved.
 - **Done:** slice 1 (thermal domain).
 - **Next:** slice 2 (volumetric and species domains, ideal gas).
-- **Tests:** 51,219 checks pass in ~35 s (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run also precompiles dependencies, which takes a few minutes.
+- **Tests:** 51,315 checks pass in ~30–35 s (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run also precompiles dependencies, which takes a few minutes.
 
 ## What exists (slice 1)
 
@@ -26,7 +26,8 @@ Validation covered (`test/`):
 - kernel identities;
 - A1, A3, A6 (A2 vacuous; A4 and A5 trivial or constructor-level);
 - B2, C1, C2, C8;
-- D1 (thermal analogue), D4 (covers D3 for thermal), D5 (slab).
+- D1 (thermal analogue), D4 (covers D3 for thermal), D5 (slab);
+- application test: composite wall (DESIGN §0.1, transient heat transfer).
 
 ## Known shortcuts and open items
 
@@ -37,7 +38,7 @@ All are logged in DECISIONS D-20:
   - steady state for isolated networks (constraint rows).
 - **Abstol is scaled by capacity** (DESIGN §11 updated). The relative tolerance still multiplies |S|, which depends on the reference; revisit with real-fluid reference states.
 - **Sparse Jacobian** is used only above 50 states.
-- **The old-library review phase** (`docs/EXISTING_LIBRARY.md`) has not started. The user decides when.
+- **The old library is not consulted** (D-21). Specific correlations or validated cases are requested from the author when needed.
 
 ## Next: slice 2
 
