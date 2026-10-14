@@ -9,7 +9,7 @@ A Julia library for multi-domain thermodynamic modeling built on A. I. Veinik's 
 - Bodies are connected by **conductors** (dissipative transport, possibly with coupled fluxes), **streams** (advection) and **converters** (reversible cross-domain transformation).
 - Adding a new form of motion should mean declaring a new (E, P) pair, not writing a new solver.
 
-The end goal, and the yardstick for every slice, is the intended functionality in DESIGN §0.1: power cycles, transient heat transfer, control-volume and control-mass systems, circuits, mass transfer and other practical thermodynamic simulations, all built from the same few element kinds.
+The end goal, and the yardstick for every slice, is the intended functionality in DESIGN §0.1: power cycles, transient heat transfer, control-volume and control-mass systems, process systems, circuits, mass transfer and other practical thermodynamic simulations, all built from the same few element kinds.
 
 It is used for engineering consulting (thermal and balance-of-plant analysis for fusion systems), so correctness, traceability and loss attribution (where entropy is produced) matter more than raw speed at first.
 
