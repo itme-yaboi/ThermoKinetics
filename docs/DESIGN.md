@@ -1,0 +1,436 @@
+# DESIGN — VeinikThermo.jl
+
+Status: **revision 2, reviewed** (2026-10-14). Revision 1's open questions have been answered and folded in (§16 records the answers). No `src/` code exists yet. Decisions with alternatives are logged in `DECISIONS.md` (referenced as D-n).
+
+## 0. Design in one paragraph
+
+The state vector is the concatenation of every body's **charges**. Each body's material provides **one potential U(E)**; forces are P = ∂U/∂E and nothing else. Physics elements (conductor laws, converters, stream drivers, reactions, sources) are **pure functions from forces to fluxes**. They never write to the state derivative. A single, small, audited **assembler** turns those fluxes into charge and entropy rates using a fixed bookkeeping rule per element *kind*. The rule conserves every non-thermal charge and energy identically, and it makes entropy production non-negative through the types of the laws. The model is held as a **graph** (Graphs.jl + MetaGraphsNext.jl) for building, validation and queries. It is then compiled to flat, type-stable arrays for the right-hand side. **No ModelingToolkit** anywhere (D-2). Adding a form of motion means declaring a new domain and writing materials and laws that use it. The assembler and solver do not change.
+
+```
+Domain (declaration) ─┐
+                      ├─> Material: U(E), groups ─> Body (charges = state)
+Property backend ─────┘                              │
+                                                     ▼
+Model graph (bodies, reservoirs, elements; ports as edges) ──compile──> flat layout
+                                                     │
+Laws: forces ──> fluxes ──> Transfer ──> Assembler (bookkeeping) ──> du/dt (physical) + ledger rates
+```
+
+## 1. Forms of motion (domains)
+
+A domain is a **declaration with no physics** (`07` §2):
+
+```julia
+abstract type FormOfMotion end
+struct Thermal     <: FormOfMotion end              # S [J/K], T [K]
+struct Volumetric  <: FormOfMotion end              # V [m³], −p [Pa]
+struct Electrical  <: FormOfMotion end              # q [C],  φ [V]
+struct Species     <: FormOfMotion; name::Symbol end  # m_k [kg], μ_k [J/kg]
+struct Momentum{N} <: FormOfMotion end              # p⃗ [kg·m/s], w⃗ [m/s]
+struct AngularMomentum <: FormOfMotion end
+struct FluxLinkage <: FormOfMotion end              # Λ [Wb], i [A] (inductor)
+# … elastic, polarization, magnetic, surface, gravitational height
+
+# traits (the whole "domain API")
+charge_symbol(d), charge_unit(d), force_symbol(d), force_unit(d)
+ncomponents(d)              # 1, or N for vector charges
+producible(d) = false       # only producible(::Thermal) = true
+```
+
+- **No sign flags exist.** The volumetric force is −p because ∂U/∂V = −p for every material (non-negotiable 3).
+- `producible` is used in one place: the assembler may write a production term only to a `Thermal` slot.
+- Domains are values, so `Species(:T2)` and `Species(:He3)` are distinct domains with no new types needed.
+- A body has **at most one** `Thermal` domain (`07` §2).
+- Kinetic and inertial forms are never both present. There is only `Momentum`.
+
+## 2. Materials: the state function
+
+### 2.1 Interface
+
+```julia
+abstract type Material end
+domains(mat)::Tuple                 # ordered charges of a body made of this material
+internal_energy(mat, E)             # U(E), E an AbstractVector (generic in eltype for AD)
+forces(mat, E)       = ∇U           # default: ForwardDiff.gradient
+eos_matrix(mat, E)   = ∇²U          # default: ForwardDiff.hessian, then symmetrized
+parts(mat)                          # coupling groups (§2.2)
+mass_slots(mat)                     # indices of Species charges (for the fixed-mass block)
+valid_state(mat, E)::Bool           # e.g. m > m_min, T within backend range
+```
+
+Derived quantities, written once for all materials:
+- `capacity_matrix(mat, E; hold=:forces | :charges)` works on the **fixed-mass block** only. The full Hessian is never inverted (D-8).
+- `is_stable(mat, E)` checks that the fixed-mass block is positive definite.
+
+Parameters that are not charges stay as parameters. The mass of an incompressible solid is the main example: such a body has no `Species` domain.
+
+### 2.2 Coupled, uncoupled, coupling groups
+
+Coupling is a property of the potential (`07` §1). It is expressed by **composition** (D-12):
+
+```julia
+gas_and_wall_charge = Composite(IdealGas(He; ...),      # part 1: (Thermal, Volumetric, Species(:He))
+                                LinearCapacitor(C))     # part 2: (Electrical,)
+```
+
+- A `Composite` is a list of parts. Each part is a material over a **disjoint** subset of domains. U = Σ U_part.
+- Each part is one **coupling group**. ∇²U is block-diagonal with one block per part, and the Jacobian sparsity pattern follows it.
+- `forces(::Composite)` evaluates each part only on its own slice of E. Uncoupled separability (A7) therefore holds by construction.
+- At most one part may contain `Thermal`.
+- A body with no coupled part is a pure accumulator (Veinik §11).
+- Optional DOFs (e.g. a gas that gains `Electrical` as a plasma) are declared by the material and enabled when the model is built. The DOF set is fixed for the life of a compiled system.
+
+### 2.3 Analytic materials (closed-form U(E), no inversion)
+
+| Material | Charges | U | Notes |
+|---|---|---|---|
+| `ConstantCapacitySolid(m, c; T_ref)` | S | m c T_ref·exp(S/(m c)) | T = T_ref e^{S/mc}; S₀ = m c ln(T₀/T_ref) |
+| `IdealGas(R, c_v; refs)` | S, V, m | m c_v T(s, v), T = T_r (v/v_r)^{−R/c_v} exp((s − s_r)/c_v) | homogeneous of degree 1; μ = g = h − Ts with consistent references |
+| `LinearCapacitor(C)` | q | q²/(2C) | |
+| `InertialMass(m)` | p⃗ | \|p⃗\|²/(2m) | force = velocity |
+
+### 2.4 Property backends and the Newton inversion
+
+Real-fluid models are explicit in (T, ρ). **Clapeyron.jl is the first backend** (AD-friendly Helmholtz); CoolProp comes later through a wrapper (D-7).
+
+1. **Reduce to one unknown using homogeneity.** From the charges (S, V, m₁…m_n) form v = V/m, s = S/m and the composition. Only **T** is unknown.
+2. **Solve s(T; v, x) = s_target** with safeguarded Newton.
+   - ∂s/∂T|_v = c_v/T > 0, so the function is monotone in a stable single phase.
+   - The bracket comes from the backend's validity range.
+   - Warm start from the last converged T (a per-body cache).
+   - Fall back to bisection if a Newton step leaves the bracket.
+   - Converge to |ΔT| ≤ 4 eps·T.
+3. **Forces from the Helmholtz function** a(T, v, x): T; −p = ∂a/∂v; μ_k = ∂A/∂m_k; U = m(a + Ts).
+4. **Derivatives via the implicit-function theorem.** `forces` on Dual inputs solves on the values, then propagates the partials through T = T(s, v, x). The Jacobian is exact, and AD never runs through the iterations.
+5. **∇²U** comes from the second derivatives of a, through the change of variables. A4 checks its symmetry *before* symmetrizing, which tests the backend's consistency.
+6. **Guards.** `valid_state` rejects m < m_min (B5 starts from p₀ = 1 Pa) and out-of-range states. The integrator's `isoutofdomain` hook uses it to reject steps.
+7. **Two-phase** (water/steam, later): backends must provide an (s, v, x)-flash behind the same `forces` interface.
+8. **Isentropic state at a given pressure** (needed by the ideal pump, §7.2): solve p(s, v) = p_target for v at fixed s. This is a 1-D monotone root find (∂p/∂v|_s < 0); it is closed-form for the ideal gas.
+
+## 3. Bodies and reservoirs
+
+```julia
+Body(name, material, E₀)                    # E₀ in charges; helpers accept (T₀, p₀, …) and invert
+Reservoir(name, forces; material = nothing) # fixed forces (Dirichlet), infinite capacity
+```
+
+- A **body** owns a contiguous slice of the physical state: its charges, in `domains(material)` order.
+- A **reservoir** has no dynamic state. If a stream draws from it, it needs a material so that s, h and μ at its (T, p) are consistent.
+- Every reservoir has **ledger** entries (§10) for the charge, energy and entropy it receives. "Bodies + reservoir ledgers" then form a closed account.
+
+## 4. Model graph, element contract, and Transfer kinds
+
+### 4.1 The model graph (D-17)
+
+The model is a `MetaGraphsNext.MetaGraph` over an undirected `Graphs.SimpleGraph`, with **two vertex kinds**:
+- **node vertices:** bodies and reservoirs;
+- **element vertices:** conductors, converters, streams, pumps, sources, reactions, switches.
+
+Each **edge is a port**: it links an element to a node and carries metadata (role `:a`, `:b`, `:h`, `:in`, `:out`, …; domains; direction).
+
+The bipartite element–port form is used because:
+- several elements can join the same pair of nodes (a conductor *and* a stream), which a simple graph cannot store as edges;
+- some elements have three or more ports (a conductor with an internal node to a wall, a multi-port converter).
+
+The graph serves building (`add!`, `connect!`), validation, topology queries and export (plotting, reports). Examples of queries:
+- connected components (isolated sub-networks for steady-state constraints and for invariant tests);
+- "which elements touch this body";
+- the Jacobian sparsity pattern.
+
+**The graph is not used in the hot loop.** `compile` lowers it to flat arrays (§11). The compiled form is plain data with no generated code, so the core never depends on a symbolic layer and can always be inspected (the lesson from the earlier library's ModelingToolkit dependency).
+
+### 4.2 Element contract
+
+```julia
+evaluate(element, forces_view, t) -> Transfer     # pure: forces in, fluxes out
+apply!(du, ledger_rates, transfer, layout)        # assembler-owned; one method per Transfer kind
+```
+
+| Transfer kind | Produced by | Each non-thermal charge | Energy | Entropy written |
+|---|---|---|---|---|
+| `ConductorTransfer` | conductors (thermal, charge, volume, mass, coupled), surface exchange | conserved | exact: Σ heat deliveries = released power | Σ Q_i/T_i ≥ 0 (§5) |
+| `ConverterTransfer` | ideal converters | **not conserved** (the one exception) | exact: Pᵀ W P ≡ 0 | none |
+| `StreamTransfer` | streams, ideal pumps, flow boundaries, pass-through outlets | conserved | exact; pump work booked as external | advected + generation ≥ 0 |
+| `InternalTransfer` | reactions (inside one body) | per stoichiometry (elements) | exact (dU = 0) | A·J/T ≥ 0 |
+| `SourceTransfer` | external sources (heat, charge, nuclear) | external, ledgered | external, ledgered | Q̇/T booked as **boundary** flow |
+
+The five `apply!` methods are the *only* code that writes `du` (D-3). A wrong law gives a wrong flux, but it cannot create charge, break energy conservation, or produce negative entropy.
+
+## 5. Conductors
+
+### 5.1 One bookkeeping rule, two heat-distribution kernels
+
+A conductor joins a and b across a declared tuple of domains, all of which must exist on both ends (n ≤ m).
+- Non-thermal rows carry fluxes J_k from a to b.
+- They release power D = Σ_k (P_k^a − P_k^b) J_k.
+- Heat is delivered to a set of thermal targets i ∈ {a, b, h} as Q_i (positive into i).
+
+The **bookkeeping** (`apply!` for `ConductorTransfer`) is the same for every conductor:
+
+- E_k: a −= J_k, b += J_k
+- S_i += Q_i / T_i for every thermal target
+- ledger: Ṡ_gen = Σ_i Q_i / T_i
+- the last Q_i is computed as D − Σ(others), so energy closes to round-off by construction
+
+**Energy:** Σ_i Q_i − Σ_k P_k^a J_k + Σ_k P_k^b J_k = D − D = 0.
+
+What differs between conductors is *how the Q_i are distributed*. Two kernels exist, and each is proven to give Σ Q_i/T_i ≥ 0.
+
+**Kernel A — direct exact form** (`07` §3.1, generalized; D-4). Weights w_i ≥ 0 with Σw_i = 1 over the targets.
+- Forces: X_Q = 1/T_b − 1/T_a and Y_k = ΔP_k · Σ_i w_i/T_i. Law: J = M x with x = (X_Q, Y).
+- Heat: Q_a = −J_Q + w_a D, Q_b = J_Q + w_b D, Q_h = w_h D.
+- Proof: Σ Q_i/T_i = J_Q X_Q + Σ_k J_k Y_k = xᵀ M_sym x ≥ 0 at any ΔT.
+- `Split(w)` is (w_a, w_b) = (1 − w, w). `Into(h)` is w_h = 1 (deposition straight into a wall or reservoir).
+- **Used for:** pure thermal conductors (the energy form Q̇ = GΔT), and coupled conductors with a thermal row (thermoelectric, thermodiffusion, Knudsen barrier).
+
+**Kernel B — internal thermal node, eliminated analytically** (`07` §3.2). This is the **default for conductors with non-thermal dissipation** (Joule, viscous, diffusion).
+- A zero-capacity node m has thermal legs of conductance G_i ≥ 0 (at least one > 0) to its targets: a, b and/or a wall h.
+- The non-thermal law is J = L ΔP, where L has a PSD symmetric part. Engineering laws map exactly (Ohm J = Δφ/R, Hagen–Poiseuille mass conductance on μ). L does not depend on T_m, so D = ΔPᵀ L_sym ΔP ≥ 0 is explicit.
+- Node balance: Σ_i G_i (T_m − T_i) = D, which gives **T_m = (Σ G_i T_i + D)/Σ G_i** (explicit, no DAE). Then Q_i = G_i (T_m − T_i).
+- Proof: Σ Q_i/T_i = D/T_m + Σ_i Q_i (1/T_i − 1/T_m). Both terms are ≥ 0, because Q_i has the sign of T_m − T_i.
+- The ledger reports the two parts separately: "dissipation at the node" and "conduction from the node". Losses are thus attributed where they physically occur.
+- The legs also conduct heat between a and b through the element (a resistor conducts heat). That is real physics, and it is accounted for exactly.
+- Nonlinear legs (radiation) would make the node balance a monotone scalar equation solved by safeguarded 1-D Newton. That is allowed later; slice 4 uses linear legs.
+
+**Choice rules:**
+- Pure thermal → kernel A, energy form.
+- Non-thermal dissipative → kernel B by default. Its leg conductances are required arguments; omitting them is an error that names the alternatives. `Split(w)` or `Into(h)` (kernel A) can be chosen explicitly when the node's conductances are unknown or irrelevant. `Into(h)` is the G_h → ∞ limit of kernel B.
+- Coupled with a thermal row → kernel A with weights on a and b only, since D can be negative (thermoelectric generation).
+- A target without `Thermal` is a build error.
+
+### 5.2 Conductance types (second law by type)
+
+```julia
+Conductance(B, W)     # M = B Bᵀ + W;  W = −Wᵀ exactly; W ≠ 0 only via a MagneticField context
+ScalarConductance(g)  # g ≥ 0 asserted at construction (errors, never clamps)
+```
+
+- **Exact single-row mappings** (kernel A):
+  - M_QQ = G·T_a T_b gives Q̇ = G ΔT.
+  - Radiation: M_QQ = εσF·T_aT_b(T_a + T_b)(T_a² + T_b²) gives Q̇ = εσF(T_a⁴ − T_b⁴).
+- **Coupled data:** a symmetric PSD Onsager matrix in entropy-production-conjugate variables, at a state-dependent temperature, rescaled only by diagonal congruence S L S.
+  - Ṡ_gen ≥ 0 holds exactly whatever temperature is used. The choice affects only constitutive accuracy, at O(ΔT/T).
+- **Gauge invariance:** only differences ΔP_k enter.
+
+### 5.3 Special conductors (same kernels)
+
+- **Thermal conductor** (`G`, radiation): kernel A, thermal row only.
+- **Surface exchange** (Robin): a conductor to a reservoir.
+- **Volume conductor** (damped piston or membrane): `Volumetric` row on −p, kernel B (viscous loss at the seal or membrane).
+- **Mass conductor** (barrier diffusion): `Species` rows on μ. Fick-type data are converted at construction.
+- **Resistor**: `Electrical` row, kernel B. C3, D1 and D2 use `Into(reservoir)` or a node whose only leg goes to the reservoir.
+
+## 6. Converters
+
+### 6.1 Ideal gyrator-form converters (now)
+
+An ideal converter is a constant antisymmetric coupling: F = W P with W = −Wᵀ, so Pᵀ W P ≡ 0. That means power is conserved and nothing is produced (D-6).
+- Two-port form: J₁ = r·P₂ and J₂ = −r·P₁.
+- **Piston:** `Volumetric` ↔ `Momentum`, with r = A_p.
+- **Motor:** `FluxLinkage` ↔ `AngularMomentum`.
+
+Converters are explicit (an ODE) because one side carries a kinetic DOF. Real converters are an ideal converter plus loss conductors.
+
+### 6.2 Transformer-form converters (DAE extension — required before balance-of-plant cycles)
+
+Massless or inductance-free idealizations (J₂ = r J₁ with P₁ = r P₂) are algebraic constraints. The design supports them through the **mass-matrix DAE** form 𝕄 du/dt = f(u), with 𝕄 singular:
+- Each constraint gets one algebraic row and one Lagrange-type flux variable λ.
+- The converter contributes F₁ = λ and F₂ = −rλ, so P₁F₁ + P₂F₂ = λ(P₁ − rP₂) = 0 on the constraint P₁ = rP₂.
+- Rodas5P and FBDF handle index-1 mass-matrix DAEs, so **the solver choice does not change**.
+- Zero-capacity non-thermal nodes (a massless fluid junction) use the same mechanism.
+- The algebraic rows and the λ variables are *physical* states for the solver. They are not ledgers.
+- This extension is scheduled as slice 5, ahead of any balance-of-plant cycle work (§15).
+
+## 7. Streams, pumps and flow boundaries
+
+### 7.1 Streams between bodies
+
+```julia
+Stream(u, d, driver)   # driver: ṁ = κ(state)·(p_u − p_d), κ ≥ 0 by type (laminar, turbulent)
+```
+
+`StreamTransfer` `apply!` (`07` §4):
+- Upwind by sign(ṁ).
+- The bundle is ṁ_k = ṁ y_k^u, the entropy ṁ s_u, and momentum if kept. V is never advected into a fixed control volume.
+- u loses ṁ_k and ṁ s_u; its energy loss is ṁ h_u (Euler's relation).
+- d gains ṁ_k and entropy (ṁ h_u − Σ μ_k^d ṁ_k)/T_d.
+- Ṡ_gen = ṁ[s_u(T_u − T_d) + Σ y_k(μ_k^u − μ_k^d)]/T_d ≥ ṁ v_u (p_u − p_d)/T_d ≥ 0.
+
+Hydraulic drivers **only set ṁ** (no double counting).
+
+### 7.2 Ideal pump (work-supplied flow, D-13)
+
+```julia
+IdealPump(u, d, ṁ_spec)   # ṁ_spec: ṁ(t) or a law; flow from u to d regardless of Δp
+```
+
+- The upstream fluid is taken isentropically from p_u to p_d. Its delivered state is (s_u, p_d), found by inversion §2.4-8.
+- The bundle delivered to d carries h* = h(s_u, p_d).
+- External shaft work Ẇ = ṁ(h* − h_u) is booked in the ledger as **external work**. For a liquid this is ṁ v Δp; for a gas it is the exact isentropic enthalpy rise.
+- Inlet-face generation is computed against the delivered state at p_d, so it is ≥ 0 by concavity.
+- Ẇ < 0 (flow down the gradient) is an ideal turbine returning work. It is equally valid, and equally ledgered.
+- This makes pumped loops possible now, without the shaft/momentum converter. The physical pump (a converter from a motor plus loss conductors) remains the long-term model; `IdealPump` is its ledgered idealization.
+
+### 7.3 Flow boundaries (labeled; unlabeled is an error)
+
+```julia
+FlowBoundary(d, material, T_in, p_in, ṁ(t); supply = :passive | :pumped)   # no default
+PassThroughOutlet(u, ṁ_spec)    # external outflow at the upstream state, no generation
+```
+
+- `:passive`: the fluid arrives at (T_in, p_in).
+  - Every evaluation checks p_in ≥ p_d. A violation is an **error**, not a warning, and it names the boundary and the time.
+  - Inlet-face generation is internal production (the C7 mixing entropy).
+- `:pumped`: an ideal pump between the boundary state and d, exactly as in §7.2. The external work is ledgered.
+- Advected entropy at boundaries is booked as **boundary** flow.
+
+### 7.4 Notes
+
+- The ṁ = 0 crossing: the right-hand side is continuous, but its Jacobian is not.
+- Inertance-driven ṁ is deferred until the momentum domain exists (accepted).
+- With kinetic or gravitational DOFs kept, μ = ∂U/∂m at fixed momentum and height. This is automatic.
+
+## 8. Internal transformations and sources
+
+- **Reactions** (`InternalTransfer`):
+  - J_r = M_r·(A/T) with M_r PSD; dm = νJ; dS = A·J/T ≥ 0; dU = 0.
+  - ν is validated against the atom matrix.
+- **Nuclear processes** (`SourceTransfer`):
+  - A prescribed rate with ν validated for nucleon number and charge.
+  - Q̇ is deposited as Q̇/T at the local T and booked as external.
+- **External sources** (heating, cooling, charge injection): `SourceTransfer`, booked as boundary flow. Their entropy can have either sign, and they never touch Ṡ_gen.
+
+## 9. Switched connections
+
+`Switched(element, schedule)` scales the element's `Transfer` by a gate g ∈ {0, 1}, held as a parameter.
+- g·M stays PSD and g·W stays antisymmetric, so every guarantee survives switching.
+- Switch times use `PresetTimeCallback` or `ContinuousCallback`, with reinitialization at each switch.
+
+## 10. Ledgers (separable) and diagnostics
+
+Ledgers are pure quadratures that never feed back into the dynamics (D-10):
+- Ṡ_gen per element, with the parts split for kernel B and streams;
+- per reservoir: charge, energy and entropy received;
+- per source, pump and boundary: energy, work and entropy delivered.
+
+**Separability:**
+- The ODE state is u = [u_phys; q_ledger]. The right-hand side computes physical rates and ledger rates in the same pass, into separate blocks.
+- **Error norm:** the integrator's `internalnorm` covers only u_phys, so ledgers never restrict step sizes.
+- **Steady state:** solves only f_phys(u_phys) = 0. Ledger *rates* are reported at the solution; Ṡ_gen [W/K] per element is the steady-state loss map.
+- **Jacobian:** ledger columns are structurally zero (no feedback), and the sparsity prototype says so.
+
+**Diagnostics reported on every transient run:**
+- **Energy-balance closure residual**: r_E(t) = U(t) − U(0) − ∫(boundary energy + external work) dt, plus its value relative to the energy throughput. It sits at integrator tolerance (§12.3). It is reported, not assumed.
+- **Entropy closure**: S(t) − S(0) − ∫ boundary entropy dt − Σ S_gen.
+- **Charge closure** per domain (round-off).
+- The loss ranking T₀ S_gen per element, and contact-rule checks.
+
+## 11. Compilation and the right-hand side
+
+`compile(model_graph)`:
+1. **Validation** at build time:
+   - port domains exist on both ends;
+   - at most one `Thermal` per body;
+   - conductor kernel choice and leg conductances given;
+   - weights sum to 1 on thermal targets;
+   - stoichiometry is conserved;
+   - W is antisymmetric;
+   - flow boundaries are labeled;
+   - stream ends are fluid bodies.
+2. **Layout:** physical slots per body and charge, then DAE algebraic slots (slice 5+), then ledger slots.
+3. **Type-stable grouping:** a tuple of homogeneous vectors, one per concrete element type.
+4. **Sparsity prototype** from the graph's incidence and the materials' coupling groups.
+5. **Scaling:** a per-state abstol vector: each charge is resolved to the equivalent of a force tolerance, through its capacity at the initial state (for entropy, `atol_T`/A_SS). Charge magnitudes are not used, because entropy has an arbitrary zero (D-20).
+6. **Isolated components**, from `connected_components` on the graph after removing reservoirs and boundaries. These identify the conserved totals for steady-state constraint rows.
+
+```
+rhs!(du, u, p, t):
+  du .= 0
+  for each body: P_i = forces(mat_i, E_i)    # once per call
+  for each element group, each element:
+      tr = evaluate(element, P, t)
+      apply!(du_phys, du_ledger, tr)
+```
+
+Dual-capable buffers use `PreallocationTools.DiffCache`. The Newton warm-start cache stores values only.
+
+## 12. Solver strategy
+
+### 12.1 Transient
+
+- **Default:** `Rodas5P`, a Rosenbrock method with an exact AD Jacobian and a sparse prototype.
+- **Large models:** `FBDF` or `QNDF` with a sparse LU (KLU).
+- **Both handle mass-matrix DAEs** (§6.2).
+- **Linear invariants are preserved to round-off:** 1ᵀf ≡ 0 implies 1ᵀJ = 0, and that carries through every Rosenbrock stage and every BDF Newton update. Charge conservation is therefore structural through the integrator.
+
+### 12.2 Steady state
+
+- NonlinearSolve on f_phys = 0, using an AD Jacobian and a transient warm start. The fallback is pseudo-transient continuation.
+- In each isolated component, one row per conserved total is replaced by its constraint.
+
+### 12.3 What "energy conserved" means numerically (accepted)
+
+- Exact per connection and per evaluation: the instantaneous residual is at round-off.
+- The integrated drift is at integrator tolerance, because U is nonlinear in the state.
+- It is reported on every transient run as the closure residual (§10).
+- An energy-exact discrete-gradient integrator remains a possible later addition. It would not change the core.
+
+### 12.4 No ModelingToolkit (firm)
+
+The core is built directly on Graphs.jl/MetaGraphsNext.jl, OrdinaryDiffEq and NonlinearSolve. There is no symbolic layer and no generated code. No MTK backend or export is planned (D-2).
+
+## 13. Structural guarantees for the non-negotiables
+
+| # | Non-negotiable | How it is guaranteed by construction |
+|---|---|---|
+| 1 | Non-thermal charges conserved by connections; converters the only exception; internal transformations explicit; production ≥ 0; external sources separate; entropy never conserved | States are charges. Only `apply!` writes `du`. Conductor and stream kernels move the *same* J out of one port and into the other. Converters are a separate kind whose only freedom is an antisymmetric W (or, in the DAE form, a constraint with zero power). Reactions and nuclear processes are separate kinds with stoichiometry validated at build time. Entropy writes come only from: heat deliveries Q_i/T_i, proven ≥ 0 per kernel (§5.1); stream generation (≥ 0 by concavity, with no prescribed uphill flow except through a ledgered pump); reaction A·J/T with PSD M_r; and external sources booked as boundary flow. Integrators preserve linear invariants. |
+| 2 | Energy across every connection; exact discrete conductor | Conductors: the last heat delivery is D − Σ(others), and Σ Q_i = D exactly. Converters: Pᵀ W P ≡ 0, or λ(P₁ − rP₂) = 0. Streams: Euler's relation. Pumps: work booked explicitly. Kernel A is `07` §3.1, valid at any ΔT; kernel B is exact by node elimination. Integrated drift is reported (§12.3). |
+| 3 | P = ∂U/∂E, volumetric −p, no sign exceptions | Forces come only from `forces(mat, E)` = ∇U (AD, or IFT for backends). Domains have no sign field. |
+| 4 | Symmetric static Hessian; L with PSD symmetric part; symmetric unless B ≠ 0 | ∇²U is the Hessian of one scalar. `Conductance(B, W)` forms BBᵀ + W, and W is reachable only through a `MagneticField` context. Kernel B's L uses the same type. |
+| 5 | True forces across material boundaries | Laws receive forces from the assembler, never concentrations. The `Species` force is μ = ∂U/∂m. Fick data are converted at construction. |
+| 6 | SI only | Float64 SI internally. Unit constants do not exist in the code. Unitful.jl only at constructor boundaries. |
+
+## 14. Testing strategy
+
+- **Kernel identity tests** (before any bodies exist): random forces, temperatures, weights, PSD M, antisymmetric W and leg conductances.
+  - Every `apply!` closes energy to round-off.
+  - Kernel A: Ṡ_gen = xᵀMx ≥ 0.
+  - Kernel B: Ṡ_gen = D/T_m + Σ Q_i(1/T_i − 1/T_m) ≥ 0.
+  - Cases include ΔT/T ~ 1 and coupled rows.
+- **08 §A** as seeded property tests on random networks:
+  - A1: the instantaneous residual at round-off; the closure residual within a tolerance-scaled bound.
+  - A2 at round-off.
+  - A3: per-element Ṡ_gen ≥ 0 at every evaluation.
+  - A4–A7 as the relevant domains arrive.
+- **Analytic cases B → C → D → E** in slice order. Each test states its tolerance and why.
+- **Closure checks** (§10) at the end of every integration test.
+- **Basis-transformation tests** for C4 and C6: transform Veinik's volume-basis coefficients to the (mass, entropy) and (charge, mass) bases. Verify that the transformed matrix stays symmetric PSD and that it reproduces the volume-basis predictions (300) and (323).
+
+## 15. Vertical slices
+
+1. **Slice 1 — ✅ done 2026-10-14** (deviations: D-20; status: `STATUS.md`):
+   - `Thermal` domain; `ConstantCapacitySolid`; `Body`, `Reservoir`.
+   - Thermal conductor (kernel A, energy form; the general kernel A/B code with identity tests).
+   - Model graph + `compile`, `rhs!`, separable ledgers, abstol, sparsity.
+   - `Rodas5P` transient; NonlinearSolve steady state.
+   - `rod(...)` helper; closure diagnostics.
+   - Tests: kernel identity; A1, A3, A6; **B2, C1, C2**; C8; D4.
+2. **Slice 2 (next):** `Volumetric`, `Species`, `IdealGas`, `Composite`, volume conductor, fixed-mass capacities. Tests: A4, A7, B3, B4.
+3. **Slice 3:** streams, hydraulic drivers, `IdealPump`, labeled flow boundaries, pass-through outlet. Tests: B5, C7, and a pumped-loop closure test: a loop with an `IdealPump` and a cooler to a reservoir at T₀. At steady state, pump work = heat rejected, and pump work = T₀ · Σ Ṡ_gen over every element (Gouy–Stodola).
+4. **Slice 4:** coupled conductors (Knudsen barrier, thermoelectric couple); `Electrical` and `LinearCapacitor`; resistor with kernel B. Tests: C3, C4, C5, C6 (with the basis transformations), D1, D2.
+5. **Slice 5 (before balance-of-plant cycles):** the mass-matrix DAE path — transformer converters, zero-capacity non-thermal nodes, kinetic DOFs and gyrator converters. Tests: E1, E2, plus DAE consistency (constraint residuals at round-off, Pᵀ F ≡ 0).
+6. **Later:** switched connections (E3, E4), the Clapeyron backend with Newton inversion, reactions and nuclear sources, two-phase flash, the momentum vector domain, inertance-driven streams.
+
+## 16. Review record (revision 1 questions)
+
+| Q | Topic | Answer | Where |
+|---|---|---|---|
+| 1 | Energy-conservation wording | Accepted. Report the closure residual on transient runs. 08 A1 and 07 §7 reworded. | §10, §12.3 |
+| 2 | Third-node deposition | Accepted. Combined with the reviewer's suggestion: internal node (kernel B) is the default for non-thermal dissipation; `Into(h)`/`Split(w)` remain explicit options. | §5.1 |
+| 3 | Gyrator-form converters; transformer deferred | Accepted, but DAE/transformer converters are required before balance-of-plant cycle work, so scheduled as slice 5. | §6.2, §15 |
+| 4 | Flow-boundary inlet against pressure | Unlabeled boundaries are an error; passive violations are errors; an explicit work-supplied `IdealPump` / `:pumped` boundary logs the work. | §7.2–7.3 |
+| 5 | Inertance-driven streams | Deferred (accepted). | §15 |
+| 6 | C6 basis | Convert to (charge, mass) and test the transformation. 08 C6 updated. | §14 |
+| 7 | Ledgers in the state | Accepted, separable: excluded from the error norm and from steady-state solves. | §10 |
+| 8 | First backend | Clapeyron.jl. | §2.4 |
+| — | ModelingToolkit | **Not used, anywhere.** Graph packages for topology instead. | §4.1, §12.4 |
