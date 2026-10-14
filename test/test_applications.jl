@@ -67,3 +67,54 @@
         end
     end
 end
+
+@testset "applications: control mass" begin
+    N2 = gas_n2()
+    cp = N2.cv + N2.R
+    T0, p_atm, V0, Th = 300.0, 101325.0, 1e-3, 400.0
+    m = p_atm * V0 / (N2.R * T0)
+
+    @testset "isochoric heating of a rigid vessel" begin
+        sys = ThermoSystem()
+        g = add!(sys, Body(:gas, N2; T = T0, V = V0, m))
+        heater = add!(sys, Reservoir(:heater; T = Th))
+        connect!(sys, Conductor(ThermalConductance(0.2)), heater, g)
+        cs = compile(sys)
+        sol = simulate(cs, (0.0, 200.0))
+        uf = sol.u[end]
+        Q = -reservoir_ledger(cs, uf, heater).U
+        @test Q ≈ m * N2.cv * (Th - T0) rtol = 1e-7          # Q = m c_v ΔT
+        @test pressure(cs, uf, g) ≈ p_atm * Th / T0 rtol = 1e-7
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10
+    end
+
+    @testset "isobaric heating behind a loose piston" begin
+        # a gas in a cylinder, a damped piston open to the atmosphere (seal friction heats the
+        # gas through an internal node), and a heater. First law for the control mass:
+        # Q = ΔU + p ΔV = m c_p ΔT, regardless of friction; W = p_atm ΔV goes to the atmosphere.
+        sys = ThermoSystem()
+        g = add!(sys, Body(:gas, N2; T = T0, V = V0, m))
+        atm = add!(sys, Reservoir(:atm; p = p_atm))
+        heater = add!(sys, Reservoir(:heater; T = Th))
+        piston = connect!(sys, Conductor(VolumeConductance(1e-8); dissipation = InternalNode(G_a = 1.0)), g, atm)
+        connect!(sys, Conductor(ThermalConductance(0.2)), heater, g)
+        cs = compile(sys)
+        sol = simulate(cs, (0.0, 200.0))
+        uf = sol.u[end]
+        @test temperature(cs, uf, g) ≈ Th rtol = 1e-7
+        @test pressure(cs, uf, g) ≈ p_atm rtol = 1e-7
+        Q = -reservoir_ledger(cs, uf, heater).U
+        W = reservoir_ledger(cs, uf, atm).U
+        ΔV = charges(cs, uf, g)[2] - V0
+        @test Q ≈ m * cp * (Th - T0) rtol = 1e-6
+        @test W ≈ p_atm * ΔV rtol = 1e-6
+        @test W ≈ m * N2.R * (Th - T0) rtol = 1e-6
+        # second law for the whole: gas entropy rise minus what the heater gave up
+        Sgen = sum(values(generated_entropy(cs, uf)))
+        @test Sgen ≈ m * cp * log(Th / T0) - Q / Th rtol = 1e-6
+        @test Sgen > 0
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10 && cl.charge_rel <= 1e-10
+    end
+end

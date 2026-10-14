@@ -36,3 +36,48 @@ end
         @test abs(r.residual) <= 1e-12 * r.scale
     end
 end
+
+# Non-thermal rows with a dissipation policy (DESIGN §5.1): Split/Into (kernel A) and the
+# internal thermal node (kernel B). Checked on the heat-distribution kernel directly.
+@testset "dissipation policies: identities" begin
+    rng = MersenneTwister(3)
+    W = VeinikThermo.WeightsPolicy
+    N = VeinikThermo.NodePolicy
+    for _ in 1:10_000
+        D = rand(rng) < 0.05 ? 0.0 : 10.0^(6rand(rng) - 3)         # released power ≥ 0 [W]
+        Ta, Tb, Th = (10.0^(1 + 3rand(rng)) for _ in 1:3)
+        w = rand(rng)
+        for pol in (W(1 - w, w, 0.0), W(0.0, 0.0, 1.0),
+                    N(10.0^(4rand(rng) - 2), 10.0^(4rand(rng) - 2), rand(rng) < 0.5 ? 0.0 : 10.0^(4rand(rng) - 2)))
+            h = VeinikThermo.distribute_heat(pol, D, Ta, Tb, Th)
+            # energy: remainder rule, closes to round-off
+            @test abs(h.Q_a + h.Q_b + h.Q_h - D) <= 4eps() * (abs(h.Q_a) + abs(h.Q_b) + abs(h.Q_h) + D)
+            @test h.S_gen >= 0                                        # sign-exact ledger
+            written = h.Q_a / Ta + h.Q_b / Tb + h.Q_h / Th            # entropy actually written
+            @test written ≈ h.S_gen rtol = 1e-9 atol = 1e-12 * (D + abs(h.Q_a) + abs(h.Q_b)) / min(Ta, Tb, Th)
+        end
+        # kernel B: the node temperature balances its legs, and production splits in two parts
+        pol = N(1.0 + rand(rng), 1.0 + rand(rng), 0.0)
+        h = VeinikThermo.distribute_heat(pol, D, Ta, Tb, Th)
+        @test pol.G_a * (h.T_m - Ta) + pol.G_b * (h.T_m - Tb) ≈ D rtol = 1e-9 atol = 1e-9 * (Ta + Tb)
+        @test h.parts.dissipation ≈ D / h.T_m rtol = 1e-12
+        @test h.parts.dissipation + h.parts.conduction == h.S_gen
+    end
+end
+
+@testset "volume conductor through the assembled right-hand side" begin
+    rng = MersenneTwister(4)
+    for _ in 1:30
+        sys, bodies, res, edges = random_gas_network(rng; nbodies = rand(rng, 2:6), nreservoirs = rand(rng, 0:2))
+        cs = compile(sys)
+        u = initial_state(cs)
+        r = energy_residual(cs, u)
+        @test abs(r.residual) <= 1e-12 * r.scale
+        @test all(≥(0), values(entropy_production(cs, u)))
+        # volume moved out of one port arrives at the other: the volume rates sum to zero
+        du = rates(cs, u)
+        dV = sum(charges(cs, du, b)[2] for b in bodies) +
+             sum((reservoir_charge(cs, du, rr, Volumetric()) for rr in res); init = 0.0)
+        @test abs(dV) <= 1e-14 * sum(abs(flux(cs, u, e).J[1]) for (e, k) in edges if k == :piston; init = 1e-30)
+    end
+end

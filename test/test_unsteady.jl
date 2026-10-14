@@ -79,3 +79,31 @@ using SpecialFunctions: erfc
         @test maxdiff[10.0] > 0.05      # the lumped model fails where the criterion says it should
     end
 end
+
+@testset "08 §D unsteady: non-thermal" begin
+    @testset "D1 lumped relaxation (volumetric): half-energy loss for any conductance" begin
+        # an elastic volume (capacity K = C) charged through a damped port from a pressure
+        # reservoir; friction heat goes to a thermal sink at T
+        C, V0, p0, pr, Tsink = 2e-9, 1e-3, 1e5, 4e5, 300.0
+        X0 = pr - p0
+        for L in (1e-10, 1e-8)
+            body = ElasticVolume(C; V0, p0)
+            sys = ThermoSystem()
+            x = add!(sys, Body(:x, body, charges_at(body; p = p0)))
+            r = add!(sys, Reservoir(:r; p = pr))
+            sink = add!(sys, Reservoir(:sink; T = Tsink))
+            k = connect!(sys, Conductor(VolumeConductance(L); dissipation = Into(sink)), r, x)
+            cs = compile(sys)
+            τ = C / L
+            sol = simulate(cs, (0.0, 40τ); saveat = τ / 4)
+            for (t, u) in zip(sol.t, sol.u)
+                @test pr - pressure(cs, u, x) ≈ X0 * exp(-t / τ) atol = 1e-6 * X0
+            end
+            led = reservoir_ledger(cs, sol.u[end], sink)
+            @test led.U ≈ 0.5 * C * X0^2 rtol = 1e-7          # dissipated energy ½ K X₀²
+            @test generated_entropy(cs, sol.u[end])[k] ≈ 0.5 * C * X0^2 / Tsink rtol = 1e-7
+            cl = closure(cs, sol)
+            @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10 && cl.charge_rel <= 1e-10
+        end
+    end
+end

@@ -223,6 +223,34 @@ Each item lists what was built instead of the design text, and why.
 - **Why:** the architecture is settled and shares nothing with the old code. The main architectural lesson is already recorded. Asking for a specific correlation or case costs less than a full review, and it avoids anchoring on the old structure.
 - `docs/EXISTING_LIBRARY.md` stays in the repository as history. Its phase rules no longer apply.
 
+### D-22 Slice 2 implementation: deviations from DESIGN.md and D-20 — accepted (slice 2, 2026-10-14)
+1. **Kernel B, `Split`/`Into` and non-thermal rows are built now**, not in slice 4 (D-20 §2). The volume conductor is the first non-thermal conductor, and DESIGN §5.3 gives it kernel B.
+   - All three policies go through one bookkeeping path: charges moved port to port, heat Q_i to thermal targets, remainder rule.
+   - Coupled conductors (thermal + non-thermal rows) are rejected at construction until slice 4.
+2. **Kernel B ledger in a sign-exact form.**
+   - The ledger records D/T_m (dissipation) + Σ G_i (T_m − T_i)²/(T_i T_m) (conduction), which is ≥ 0 in floating point.
+   - The entropy written is Σ Q_i/T_i. The two agree to round-off, and entropy closure stays at ~1e-15.
+   - Alternative: ledger = written entropy. Rejected: it can come out at −eps when T_a ≈ T_b, which would break the per-element A3 check for no physical reason.
+3. **`ElasticVolume(C; V0, p0)` added** (not in DESIGN §2.3, now listed there).
+   - It is an uncoupled volumetric store: Veinik's linear one-DOF body.
+   - It is needed for A7 (a separable composite), for the §11 check that an uncoupled body is a pure accumulator, and for D1 proper.
+   - Its docstring says it is not a gas.
+4. **D1 proper is delivered now** in the volumetric domain: exponential relaxation, and ½K X₀² dissipated for any conductance. D-20 §8's thermal analogue stays. D2 (capacitors) still waits for `Electrical` in slice 4.
+5. **Tolerances are per domain.**
+   - `default_force_atol(domain)`: 1e-8 K, 1e-4 Pa, 1e-6 J/kg. Each is scaled through 1/A_kk.
+   - `simulate`'s `atol_T` keyword is replaced by `atol_scale` (API change).
+6. **Charge-closure threshold is 1e-10, not 1e-12.**
+   - With reservoirs, Σ body charge + reservoir ledger drifted up to ~8e-12 relative.
+   - That is round-off amplified by the conditioning of each Rosenbrock linear solve, not integrator error, which would be ~1e-8.
+   - DESIGN §12.1 is annotated.
+7. **Reservoir ledgers:** one slot per domain (the charge received; entropy for `Thermal`), then energy. Energy includes the P·J carried by charges as well as heat. `Reservoir(name, domain => force, …)` and `Reservoir(name; T, p)` replace the thermal-only constructor (closes D-20 §3).
+8. **`valid_state` and `isoutofdomain` step rejection** are implemented (closes D-20 §5). `Body` also refuses invalid initial charges.
+9. **Element groups are sorted by type name.**
+   - The concrete `CompiledSystem` type, and so the compiled solver, no longer depends on insertion order.
+   - First-solve compile latency for a new combination of element types is still several seconds; it dominates the ~75 s test run.
+   - Alternatives for later: type-erased element storage (FunctionWrappers) or precompile workloads.
+10. **No mass conductor yet.** `Species` exists, and A2 covers species mass, but nothing transports mass until slice 3 (streams) or slice 4 (mass conductors).
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

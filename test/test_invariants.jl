@@ -76,3 +76,59 @@
         end
     end
 end
+
+# The same invariants on networks of ideal gases joined by diathermal walls and damped
+# pistons (volume conductors whose friction heat goes to an internal node).
+@testset "08 §A invariants: gas networks" begin
+    rng = MersenneTwister(77)
+    T_END = 3000.0     # ≥ 30 of the slowest time constants for these parameter ranges
+
+    @testset "A1, A2, A3 (isolated)" begin
+        for trial in 1:12
+            sys, bodies, _, edges = random_gas_network(rng; nbodies = rand(rng, 2:6))
+            cs = compile(sys)
+            u0 = initial_state(cs)
+            sol = simulate(cs, (0.0, T_END); saveat = T_END / 200)
+            cl = closure(cs, sol)
+            @test cl.energy_rel <= 1e-6                                  # A1, integrated
+            @test cl.entropy_rel <= 1e-10
+            # A2: every non-thermal charge total is conserved to round-off
+            for d in (Volumetric(), Species(:He), Species(:N2))
+                Q0 = total_charge(cs, u0, d)
+                @test maximum(abs(total_charge(cs, u, d) - Q0) for u in sol.u) <= 1e-13 * max(abs(Q0), 1e-30)
+            end
+            @test cl.charge_rel <= 1e-10
+            # A3: S_total non-decreasing, per-element production ≥ 0 along the trajectory
+            S = [total_entropy(cs, u) for u in sol.u]
+            @test all(diff(S) .>= -1e-10 * maximum(abs, S))
+            @test all(all(≥(0), values(entropy_production(cs, u))) for u in sol.u[1:20:end])
+        end
+    end
+
+    @testset "A6 equilibrium: T and p equal across every open connection" begin
+        for trial in 1:12
+            sys, bodies, _, edges = random_gas_network(rng; nbodies = rand(rng, 2:6))
+            cs = compile(sys)
+            uf = simulate(cs, (0.0, T_END)).u[end]
+            for (e, kind) in edges
+                f = flux(cs, uf, e)
+                @test abs(f.T_a - f.T_b) <= 1e-5 * f.T_a
+                kind === :piston && @test abs(pressure(cs, uf, f.a) - pressure(cs, uf, f.b)) <= 1e-5 * pressure(cs, uf, f.a)
+            end
+        end
+    end
+
+    @testset "A1, A2 closure with reservoirs" begin
+        for trial in 1:8
+            sys, bodies, res, edges = random_gas_network(rng; nbodies = rand(rng, 2:5), nreservoirs = rand(rng, 1:2))
+            cs = compile(sys)
+            sol = simulate(cs, (0.0, T_END / 3))
+            cl = closure(cs, sol)
+            @test cl.energy_rel <= 1e-6
+            @test cl.entropy_rel <= 1e-10
+            # body volume + volume received by reservoirs: a linear invariant, so round-off, but
+            # amplified by the conditioning of each implicit (Rosenbrock) solve over many steps
+            @test cl.charge_rel <= 1e-10
+        end
+    end
+end

@@ -3,7 +3,7 @@
 # The graph is for building, validation and topology queries; `compile` lowers it to flat,
 # type-stable data and the graph is never touched in the right-hand side.
 
-"A port: the edge between an element and a node. `role` is :a or :b for a conductor."
+"A port: the edge between an element and a node. `role` is :a, :b, or :h (third thermal node) for a conductor."
 struct Port
     role::Symbol
 end
@@ -53,17 +53,25 @@ end
     connect!(sys, conductor, a, b; name) -> Symbol
 
 Join nodes `a` and `b` with a conductor. Positive flux runs from `a` to `b`. Parallel
-conductors between the same pair are allowed.
+conductors between the same pair are allowed. If the conductor's dissipation policy names
+a third thermal node (`Into(h)`, `InternalNode(h = …)`), that node gets a port `:h`.
 """
 function connect!(sys::ThermoSystem, el::Conductor, a::Symbol, b::Symbol;
                   name::Symbol = Symbol(:conductor_, length(sys.elements) + 1))
     _check_node(sys, a)
     _check_node(sys, b)
     a == b && throw(ArgumentError("a conductor needs two distinct nodes, got :$a twice"))
+    h = third_node(el.dissipation)
+    if h !== nothing
+        _check_node(sys, h)
+        h in (a, b) && throw(ArgumentError("the third node must differ from the conductor's ends; " *
+                                           "use Split(w) to put the heat into an end"))
+    end
     _check_new_label(sys, name)
     sys.graph[name] = el
     sys.graph[name, a] = Port(:a)
     sys.graph[name, b] = Port(:b)
+    h === nothing || (sys.graph[name, h] = Port(:h))
     push!(sys.elements, name)
     return name
 end

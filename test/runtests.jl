@@ -2,11 +2,13 @@ using VeinikThermo
 using Test
 using Random
 using LinearAlgebra
+using StaticArrays
 
 include("helpers.jl")
 
 @testset "VeinikThermo" begin
     include("test_build.jl")          # construction, validation, units hygiene
+    include("test_materials.jl")      # state functions: A4, A7, B3
     include("test_kernel.jl")         # conductor bookkeeping identities (kernel A, thermal row)
     include("test_invariants.jl")     # 08 §A: A1 energy, A3 second law, A6 equilibrium (A2, A4, A5 where applicable)
     include("test_thermostatics.jl")  # 08 §B: B2

@@ -51,3 +51,62 @@ function slowest_rate(p)
     λ = sort(eigvals(Symmetric(Cmh * L * Cmh)))
     return λ[2]
 end
+
+# --- slice 2: gases and gas networks ------------------------------------------------------
+
+gas_he() = IdealGas(:He; R = 2077.1, cv = 1.5 * 2077.1)    # monatomic
+gas_n2() = IdealGas(:N2; R = 296.8, cv = 2.5 * 296.8)      # diatomic
+
+"Random valid charges for a material (tests of state-function properties)."
+random_charges(rng, mat::ConstantCapacitySolid) = charges_at(mat; T = 50 + 1950rand(rng))
+random_charges(rng, g::IdealGas) =
+    charges_at(g; T = 100 + 1900rand(rng), p = 10.0^(3 + 4rand(rng)), m = 10.0^(-4 + 5rand(rng)))
+random_charges(rng, e::ElasticVolume) = charges_at(e; V = e.V0 * (0.5 + rand(rng)))
+function random_charges(rng, c::Composite)
+    return vcat((random_charges(rng, p) for p in c.parts)...)
+end
+
+"""
+    random_gas_network(rng; nbodies, nreservoirs = 0, extra_edges = 2)
+
+Ideal-gas bodies (He or N₂) joined by a random spanning tree plus extra edges. Each edge
+is a thermal conductor (a diathermal wall) or a damped piston: a volume conductor whose
+friction heat goes to an internal node with legs to both gases. Optional reservoirs carry
+both T and p. Returns `(sys, bodies, reservoirs, edges)`, where each edge is
+`(label, kind)` and kind is `:thermal` or `:piston`.
+"""
+function random_gas_network(rng; nbodies, nreservoirs = 0, extra_edges = 2)
+    sys = ThermoSystem()
+    gases = (gas_he(), gas_n2())
+    bodies = Symbol[]
+    for i in 1:nbodies
+        g = gases[rand(rng, 1:2)]
+        T = 250 + 500rand(rng); p = 0.5e5 + 2e5rand(rng); V = 1e-3 * (0.5 + rand(rng))
+        push!(bodies, add!(sys, Body(Symbol(:g, i), g; T, V, m = p * V / (g.R * T))))
+    end
+    pairs = [(rand(rng, 1:i-1), i) for i in 2:nbodies]
+    for _ in 1:extra_edges
+        i, j = rand(rng, 1:nbodies), rand(rng, 1:nbodies)
+        i == j || push!(pairs, (i, j))
+    end
+    edges = Tuple{Symbol,Symbol}[]
+    for (i, j) in pairs
+        push!(edges, _random_edge!(rng, sys, bodies[i], bodies[j]))
+    end
+    reservoirs = Symbol[]
+    for r in 1:nreservoirs
+        res = add!(sys, Reservoir(Symbol(:r, r); T = 250 + 500rand(rng), p = 0.5e5 + 2e5rand(rng)))
+        push!(reservoirs, res)
+        push!(edges, _random_edge!(rng, sys, res, bodies[rand(rng, 1:nbodies)]))
+    end
+    return sys, bodies, reservoirs, edges
+end
+
+function _random_edge!(rng, sys, a, b)
+    if rand(rng) < 0.5
+        return (connect!(sys, Conductor(ThermalConductance(0.01 + 0.09rand(rng))), a, b), :thermal)
+    else
+        legs = InternalNode(G_a = 0.01 + 0.09rand(rng), G_b = 0.01 + 0.09rand(rng))
+        return (connect!(sys, Conductor(VolumeConductance(1e-9 + 9e-9rand(rng)); dissipation = legs), a, b), :piston)
+    end
+end
