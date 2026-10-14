@@ -2,3 +2,34 @@ name = "VeinikThermo"
 uuid = "63528d13-9ffc-4ed7-91a4-9af879b78066"
 version = "0.1.0"
 authors = ["itme-yaboi <itmeyaboi350@gmail.com>"]
+
+[deps]
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MetaGraphsNext = "fa8bd995-216d-47f1-8a91-f3b68fbeb377"
+NonlinearSolve = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
+OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+ForwardDiff = "1.4.6"
+Graphs = "1.15.0"
+LinearAlgebra = "1.13.0"
+MetaGraphsNext = "0.8.0"
+NonlinearSolve = "4.32.0"
+OrdinaryDiffEqRosenbrock = "2.7.5"
+SciMLBase = "3.58.0"
+SparseArrays = "1.13.0"
+StaticArrays = "1.9.23"
+julia = "1.10"
+
+[extras]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Random", "SpecialFunctions", "Test"]

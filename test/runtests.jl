@@ -1,0 +1,15 @@
+using VeinikThermo
+using Test
+using Random
+using LinearAlgebra
+
+include("helpers.jl")
+
+@testset "VeinikThermo" begin
+    include("test_build.jl")          # construction, validation, units hygiene
+    include("test_kernel.jl")         # conductor bookkeeping identities (kernel A, thermal row)
+    include("test_invariants.jl")     # 08 §A: A1 energy, A3 second law, A6 equilibrium (A2, A4, A5 where applicable)
+    include("test_thermostatics.jl")  # 08 §B: B2
+    include("test_thermokinetics.jl") # 08 §C: C1, C2, C8
+    include("test_unsteady.jl")       # 08 §D: D1 (thermal analogue), D4 (= D3 thermal), D5 (slab)
+end
