@@ -1,3 +1,7 @@
 _reference/veinik_source/page_images/
 reference/
 Manifest.toml
+# copyrighted books: local only (D-25)
+_reference/graphing/*Lengauer*.pdf
+_reference/veinik_source/*_ocr.txt
+_reference/veinik_source/*_RU.txt

@@ -284,6 +284,14 @@ Each item lists what was built instead of the design text, and why.
   - The ~20 MB PDF also stays in history even if deleted later.
   - Staging those files waits for the user's explicit go-ahead.
 
+### D-25 Which `_reference/` files are committed — accepted (user, 2026-10-14); narrows D-24
+- **Chosen (option b):**
+  - Commit the Freivalds–Glagoļevs paper, `_reference/veinik_source/README.md` and `notes_by_section_ch6-18.md`.
+  - Leave the books local and git-ignored: Lengauer's textbook, the 1964 OCR texts, and the 1966/1973 Russian texts. `page_images/` stays ignored too (D-24).
+- **Alternatives:** commit everything (D-24 as first written); Git LFS for the large PDFs.
+- **Why:** copyrighted books should not be copied into every clone and into permanent history.
+- **Consequence:** in a fresh clone, the Lengauer citations in DESIGN §17.1 and the Veinik source paths resolve only after the author copies the books in locally. The paper, the notes and `docs/veinik/` are always available.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

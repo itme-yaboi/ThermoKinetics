@@ -499,7 +499,7 @@ What the paper **does not** specify (it cites other work), and the plan for it.
 **Companion reference for routing and compaction** (the paper's [14]):
 
 > T. Lengauer, *Combinatorial Algorithms for Integrated Circuit Layout*, Wiley–Teubner (Applicable Theory in Computer Science), 1990/1992.
-> Local copy: `_reference/graphing/(Applicable Theory in Computer Science) Thomas Lengauer (auth.) - Combinatorial Algorithms for Integrated Circuit Layout-Vieweg+Teubner Verlag (1992).pdf` (714 PDF pages; **PDF page = printed page + 18**).
+> Local copy, **not in git** (copyrighted book, D-25): `_reference/graphing/(Applicable Theory in Computer Science) Thomas Lengauer (auth.) - Combinatorial Algorithms for Integrated Circuit Layout-Vieweg+Teubner Verlag (1992).pdf` (714 PDF pages; **PDF page = printed page + 18**).
 
 | Need | Lengauer section | Printed pages (PDF pages) |
 |---|---|---|
