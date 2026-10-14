@@ -40,6 +40,7 @@ Validation covered (`test/`):
   - Linear invariants (charge, entropy closure) hold to round-off amplified by implicit-solve conditioning, ≲1e-11 relative (D-22 §6).
 - **Compile latency:** several seconds for each new combination of element types (D-22 §9).
 - **Sparse Jacobian:** used only above 50 states.
+- **Network plotting** is planned (DESIGN §17, D-23), not implemented. It must use the Freivalds–Glagoļevs orthogonal layout in `_reference/graphing/`. It is a separate track, scheduled when the user asks.
 - **The old library is not consulted** (D-21). Specific correlations or validated cases are requested from the author when needed.
 
 ## Next: slice 3

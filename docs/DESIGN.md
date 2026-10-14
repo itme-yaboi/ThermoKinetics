@@ -33,6 +33,7 @@ The library exists so that users can build **practically useful thermodynamic si
 | **Coupled and multi-physics** | thermoelectric, electrokinetic, magnetocaloric, MHD pressure drop | coupled conductors (Onsager–Casimir when B ≠ 0), coupled materials | 4, later | C4, C5, C6; Hartmann-flow MHD pressure drop |
 
 Cross-cutting, for every use:
+- **network plotting**: a schematic diagram of any model (bodies, reservoirs and elements laid out with the compact orthogonal algorithm of §17), optionally coloured by results such as temperature, pressure or entropy production;
 - transient and steady solutions;
 - **loss attribution** (Ṡ_gen and exergy destruction per element);
 - energy and entropy closure on every run;
@@ -161,6 +162,8 @@ The graph serves building (`add!`, `connect!`), validation, topology queries and
 - connected components (isolated sub-networks for steady-state constraints and for invariant tests);
 - "which elements touch this body";
 - the Jacobian sparsity pattern.
+
+The same graph also carries **display metadata** for network plotting (labels, component kind, box size, optional pinned positions; §17). Display data never reaches `compile` or the physics.
 
 **The graph is not used in the hot loop.** `compile` lowers it to flat arrays (§11). The compiled form is plain data with no generated code, so the core never depends on a symbolic layer and can always be inspected (the lesson from the earlier library's ModelingToolkit dependency).
 
@@ -444,6 +447,7 @@ The core is built directly on Graphs.jl/MetaGraphsNext.jl, OrdinaryDiffEq and No
 3. **Slice 3 (next):** streams, hydraulic drivers, `IdealPump`, labeled flow boundaries, pass-through outlet. Tests: B5, C7, and a pumped-loop closure test: a loop with an `IdealPump` and a cooler to a reservoir at T₀. At steady state, pump work = heat rejected, and pump work = T₀ · Σ Ṡ_gen over every element (Gouy–Stodola).
 4. **Slice 4:** coupled conductors (Knudsen barrier, thermoelectric couple); `Electrical` and `LinearCapacitor`; resistor with kernel B. Tests: C3, C4, C5, C6 (with the basis transformations), D1, D2.
 5. **Slice 5 (before balance-of-plant cycles):** the mass-matrix DAE path — transformer converters, zero-capacity non-thermal nodes, kinetic DOFs and gyrator converters. Tests: E1, E2, plus DAE consistency (constraint residuals at round-off, Pᵀ F ≡ 0).
+- **Plotting track P (independent of the physics slices; not started).** Network plotting per §17: display metadata on the graph, the Freivalds–Glagoļevs layout, edge routing, a Makie-based renderer. It can be scheduled between any two slices when the user asks for it.
 6. **Later:** switched connections (E3, E4), the Clapeyron backend with Newton inversion, reactions and nuclear sources, two-phase flash, the momentum vector domain, inertance-driven streams.
 
 ## 16. Review record (revision 1 questions)
@@ -459,3 +463,88 @@ The core is built directly on Graphs.jl/MetaGraphsNext.jl, OrdinaryDiffEq and No
 | 7 | Ledgers in the state | Accepted, separable: excluded from the error norm and from steady-state solves. | §10 |
 | 8 | First backend | Clapeyron.jl. | §2.4 |
 | — | ModelingToolkit | **Not used, anywhere.** Graph packages for topology instead. | §4.1, §12.4 |
+
+## 17. Network plotting (planned; not implemented)
+
+A basic network-plotting ability is part of the intended functionality (§0.1). It turns a model into a schematic diagram that can be checked by eye and put in a report. Results can optionally be overlaid: node colour by T or p, element colour or width by Q̇ or Ṡ_gen, which gives a picture of the loss map. It is a separate track (§15 P) and touches no physics.
+
+### 17.1 Reference algorithm (required)
+
+The layout **must** implement the node-placement algorithm in:
+
+> K. Freivalds and J. Glagoļevs, *Graph Compact Orthogonal Layout Algorithm*, Institute of Mathematics and Computer Science, University of Latvia.
+> Local copy (git-ignored): `_reference/graphing/Freivalds, Graph Compact Orthogonal Layout Algorith.pdf` (12 pages).
+
+What the paper specifies, and what the implementation follows:
+- **Drawing model.** Nodes are rectangles of prescribed minimum size (w_i, h_i) with a minimum gap δ. Edges are orthogonal polylines. Only point-wise edge crossings are allowed.
+- **Three phases** (Fig. 1): node placement, then edge routing, then normalization (overlap removal with minimal node movement). The paper's contribution, and the part specified in detail, is node placement.
+- **Grid cell size c** (eq. 1), from L_min and L_max of the boxes plus δ. Each node occupies ⌈(w_i + δ)/c⌉ × ⌈(h_i + δ)/c⌉ cells.
+- **Edge-length function** (eq. 2): d(v_i, v_j) = d_e(border to border) + (1/20)·min(|Δx_c|/(w′_i + w′_j), |Δy_c|/(h′_i + h′_j)). The second term favours aligned centres.
+- **Compaction** (§3.1, eq. 3). It works in one direction at a time:
+  - minimize Σ_(i,j)∈E (z_i + w′_i/2 − z_j − w′_j/2)² subject to z_j − z_i ≥ γ·w′_i for every edge of the visibility graph S;
+  - round with x′_i = ⌊z_i⌋;
+  - γ ≥ 1 leaves slack; γ = 1 gives the tightest packing.
+- **Main loop** (Algorithm 1, p. 7):
+  - grid 5√|V| × 5√|V|; iterationCount = 90√|V|;
+  - temperature T₀ = 2√|V|, cooled by k = (0.2/T₀)^(1/iterationCount);
+  - each node moves to the median of its neighbours plus a random displacement ∝ T, placed at the nearest free cell (searching Manhattan radius d + 1), and is swapped with a neighbouring node when it did not move;
+  - compaction every 9th iteration, alternating directions, with γ = 3;
+  - stage 1 uses unit-size nodes; compaction with the real sizes (`expand = true`) switches to stage 2, where γ decreases to 1 over the last compactions.
+- **Starting layouts** (§3.3): random (default in Algorithm 1), force-directed (T = 3, 100 iterations, compaction every 3rd), or BFS (iterationCount = 10√|V|, T = 0.2√|V|).
+  - The paper finds force-directed best. Use it once a force-directed placement is available; keep random as the fallback.
+  - Use a seeded RNG so layouts are reproducible.
+
+What the paper **does not** specify (it cites other work), and the plan for it:
+- **Edge routing** ([14] Lengauer: integrated-circuit layout). Plan: shortest orthogonal routes on the cell grid (A* or Lee maze routing) with a bend penalty. Edges sharing a node side get spread ports.
+- **Normalization / overlap removal** ([7] Dwyer–Marriott–Stuckey; [10] Freivalds–Kikusts). Plan: reuse the compaction machinery, a 1-D quadratic objective with separation constraints, to push apart overlapping segments and nodes while minimizing movement.
+- **The QP solver for eq. (3)** ([10]). The constraints are pure difference constraints z_j − z_i ≥ d_ij, and the objective is a graph Laplacian plus small regularization. Options:
+  - (a) implement a small active-set / block-merging solver for separation constraints (Dwyer-style), keeping the dependency footprint small;
+  - (b) call a general QP solver.
+  - Decide at implementation time and log it in DECISIONS.
+
+These references are not in `_reference/`. Ask the user before relying on one; the plans above need nothing beyond standard textbook methods.
+
+### 17.2 What gets drawn
+
+The model graph is bipartite (§4.1): node vertices (bodies, reservoirs) and element vertices (conductors, later streams, converters, pumps…), with ports as edges.
+- **Default: lay out the full bipartite graph.** Bodies and reservoirs are larger labelled boxes. Elements are small boxes (the paper handles mixed node sizes directly). Ports are edges.
+  - This draws multi-port elements naturally: an `InternalNode` leg or `Into(h)` is just a third edge.
+  - It also keeps parallel conductors visually distinct.
+- **Option: collapse two-port elements into labelled edges** for a cleaner schematic. Multi-port elements stay boxes.
+
+### 17.3 Display metadata on the graph
+
+Display data lives with the model graph and is never read by `compile`:
+- a display label;
+- the component kind (body / reservoir / conductor kind / …), which picks the default box size and style;
+- the box size (w, h);
+- an optional pinned position (excluded from moves);
+- an optional group (e.g. the cells of one `rod!` drawn as a row).
+
+Implementation options:
+- (a) a display side-table `Dict{Symbol,DisplayInfo}` in `ThermoSystem`, filled with defaults by `add!`/`connect!`;
+- (b) wrapping vertex data as `(component, display)`.
+
+(a) is preferred: it leaves the physics data untouched and is trivially optional.
+
+Layout output: a `NetworkLayout` with box rectangles per vertex and polyline routes per port edge. It is a plain-data result, so it can be tested without any renderer and reused across renders.
+
+### 17.4 Rendering and dependencies
+
+- The layout (pure Julia: grid, moves, compaction, routing) lives in the core package, because it is deterministic and testable.
+- Rendering uses Makie (CairoMakie for files, GLMakie for interactive) through a **package extension** (weak dependency), so users of the physics never load a plotting stack. `plot_network(sys_or_cs, u = nothing; overlay = …)` draws the layout, with optional result overlays.
+- No ModelingToolkit and no symbolic layer (D-2). GraphMakie's own layouts are not used; it may be used for drawing primitives only if that turns out simpler.
+
+### 17.5 Tests (when implemented)
+
+- **Layout invariants on random and rod-shaped models:**
+  - no two boxes overlap (gap ≥ δ);
+  - every route is axis-aligned and connects the right ports;
+  - routes do not pass through boxes;
+  - layouts are reproducible for a fixed seed.
+- **Compaction:**
+  - the QP solution satisfies every separation constraint;
+  - total edge length does not increase across a compaction step;
+  - γ = 1 gives no slack along the critical chain.
+- **Quality smoke tests:** grid-like models (a rod, a 2-D slab) come out planar with straight edges, like the partial-grid results in the paper's Fig. 4(a).
+- **Renderer:** a CairoMakie smoke test that writes a PNG for a small model with an overlay (in the extension's tests).

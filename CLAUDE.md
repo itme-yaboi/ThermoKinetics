@@ -65,6 +65,10 @@ DESIGN.md describes the target. STATUS.md and the code say what exists. When the
 
 The author previously built a Julia thermal library (ThermalModeling / TSM), a conventional lumped-element code built on ModelingToolkit. That dependency proved a major and nearly irreversible mistake, which is why this project uses no ModelingToolkit (D-2). The old code is **not** a reference for this project and is not consulted. If a specific piece might help (a heat-transfer or friction correlation, a property wrapper, a validated case for the regression comparison in `08` §F), ask the author rather than looking for it.
 
+## Network plotting reference
+
+Network plotting (DESIGN §17, track P; not implemented yet) **must** use the compact orthogonal node-placement algorithm of Freivalds & Glagoļevs, *Graph Compact Orthogonal Layout Algorithm*: `_reference/graphing/Freivalds, Graph Compact Orthogonal Layout Algorith.pdf` (git-ignored; 12 pages, with Algorithm 1 on p. 7). Read it, and DESIGN §17, before implementing any plotting. The paper specifies node placement only; DESIGN §17.1 says how edge routing and normalization are filled in.
+
 ## Source material (only when needed)
 
-Raw Veinik sources live in `_reference/veinik_source/` (git-ignored): OCR text of the whole 1964 book, page images, section notes, and the Russian 1966 and 1973 texts. Use them only to check what Veinik actually wrote or to verify an equation number; `docs/veinik/` remains the working reference. Read `_reference/veinik_source/README.md` first. OCR garbles equations, so open the page image when it matters.
+Raw Veinik sources live in `_reference/veinik_source/` (git-ignored; the plotting reference is in `_reference/graphing/`, see above): OCR text of the whole 1964 book, page images, section notes, and the Russian 1966 and 1973 texts. Use them only to check what Veinik actually wrote or to verify an equation number; `docs/veinik/` remains the working reference. Read `_reference/veinik_source/README.md` first. OCR garbles equations, so open the page image when it matters.

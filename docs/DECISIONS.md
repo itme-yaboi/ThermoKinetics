@@ -251,6 +251,24 @@ Each item lists what was built instead of the design text, and why.
    - Alternatives for later: type-erased element storage (FunctionWrappers) or precompile workloads.
 10. **No mass conductor yet.** `Species` exists, and A2 covers species mass, but nothing transports mass until slice 3 (streams) or slice 4 (mass conductors).
 
+### D-23 Network plotting: Freivalds–Glagoļevs compact orthogonal layout — accepted (user, 2026-10-14); details proposed
+- **Chosen (user):**
+  - Basic network plotting is part of the intended functionality.
+  - The layout implements the node-placement algorithm of Freivalds & Glagoļevs, *Graph Compact Orthogonal Layout Algorithm*. The local copy is `_reference/graphing/` (git-ignored).
+  - Not implemented yet; specified in DESIGN §17 as plotting track P.
+- **Proposed details** (DESIGN §17), to settle when the track is built:
+  - lay out the full bipartite graph (elements as small boxes), with an option to collapse two-port elements into edges;
+  - display metadata in a side-table on `ThermoSystem`, never read by `compile`;
+  - the layout in core Julia, rendering through a Makie package extension;
+  - edge routing by grid maze/A* with bend penalty;
+  - normalization and the eq. (3) QP via a separation-constraint solver.
+- **Alternatives:**
+  - general-purpose layouts (spring or stress layouts from NetworkLayout.jl or GraphMakie) — not orthogonal, so poor as engineering schematics;
+  - the topology–shape–metrics approach (Tamassia) — minimizes bends but gives poor area and edge length on practical graphs, per the paper's §1;
+  - Graphviz `dot` with orthogonal splines — an external binary, with little control over node sizes and pinning;
+  - plotting inside the core package — forces a plotting stack on every user.
+- **Why:** orthogonal, compact layouts with prescribed box sizes match how thermal and process schematics are drawn. The algorithm handles mixed node sizes, which the bipartite element graph needs. Keeping layout separate from rendering makes it testable and keeps the core light.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)
