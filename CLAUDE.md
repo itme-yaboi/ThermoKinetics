@@ -26,21 +26,43 @@ Everything needed from Veinik's books is in `docs/veinik/`. **Do not ask for or 
 
 ## Non-negotiable physics
 
-1. Every non-thermal charge is conserved by every **connection between bodies**. Changes *inside* a body (chemical reactions, radioactive decay and transmutation such as tritium decay) are explicit internal transformations that conserve elements or total mass as appropriate. **Entropy *production* is ≥ 0**, and it is the only internal source of any charge. External sources (nuclear heating, prescribed cooling) are separate, explicit boundary or source terms, and their entropy can have either sign. Never conserve entropy.
-2. Energy is conserved across every connection. Dissipated energy re-enters as entropy at the temperature of the body where it is deposited.
+1. Every non-thermal charge is conserved by every **connection between bodies**, except **converters**, which transform one charge into another at a fixed ratio while conserving power with zero entropy production. Changes *inside* a body (chemical reactions, radioactive decay and transmutation such as tritium decay) are explicit internal transformations. Reactions are affinity-driven; nuclear processes are prescribed source terms that conserve nucleon number and charge (see `07` §5). **Entropy *production* is ≥ 0**, and it is the only internal source of any charge. External sources (nuclear heating, prescribed cooling) are separate, explicit boundary or source terms, and their entropy can have either sign. Never conserve entropy.
+2. Energy is conserved across every connection. Conductors use the exact discrete formulation in `07` §3.1, which guarantees Ṡ_gen ≥ 0 at any finite ΔT.
 3. Forces are defined strictly as P = ∂U/∂E, so the volumetric force is −p. No per-domain sign exceptions.
 4. Static reciprocity comes from U being one potential (its Hessian is symmetric). Kinetic coefficient matrices L have a positive semidefinite symmetric part. L is symmetric unless a magnetic field is present (Onsager–Casimir).
 5. Use true forces across material boundaries: μ, not concentration (the contact rule).
 6. SI units only. Veinik's kgf, kcal, A = 1/427 and γ (specific weight) never appear in code.
 
+## Start of every session
+
+1. Read `docs/STATUS.md`: where the project stands, what is next, known shortcuts.
+2. Read `docs/DESIGN.md` (the target architecture) and `docs/DECISIONS.md` (why things are as they are) as needed for the task. Do not re-open a decision recorded there without new information; supersede it with a new entry instead.
+3. Run the tests (`julia --project=. -e 'using Pkg; Pkg.test()'`) before changing code, so you know the baseline.
+
+DESIGN.md describes the target. STATUS.md and the code say what exists. When they differ, believe the code and fix the docs.
+
 ## How to work
 
-1. **Design first.** Before implementation, write `docs/DESIGN.md`: types, state representation (**charges-as-states is decided**, see `07` §1; design the Newton inversion for property backends), assembly, solver strategy, and how each non-negotiable above is guaranteed structurally. Stop and ask for review of DESIGN.md before building past a minimal prototype.
-2. **Tests alongside code.** Implement the invariant tests in `08_validation_cases.md` §A first, then the analytic cases, in roughly the order B → C → D → E.
-3. **Small vertical slices.** First slice: thermal bodies, fixed-temperature reservoirs, an energy-form thermal conductor (`07` §3), and a chain of cells for a discretized rod (B2, C1, C2). Then add the volumetric domain and an ideal gas (B3, B4). Then a stream (B5, C7). Then coupled conductors (C4, C5).
+1. **Design is approved** (DESIGN.md revision 2, reviewed 2026-10-14). Build in the vertical slices of DESIGN §15. Any change to the design itself (new element kinds, new state representation, a new kind of solver) goes into DESIGN.md and DECISIONS.md and is put to the user for review before it is built.
+2. **Tests first, alongside code.** For each slice, write its tests from `08_validation_cases.md` (§A invariants, then analytic cases B → C → D → E) before the code, then write code until they pass. Every integration test also checks `closure` (energy and entropy balance).
+3. **Keep `src/` minimal**: only what the current slice needs.
 4. When a book equation and a non-negotiable disagree, the non-negotiable wins. Note the disagreement in `docs/DECISIONS.md`.
-5. Keep a running `docs/DECISIONS.md`: one entry per design decision, with alternatives considered.
+5. **DECISIONS.md is append-only**: one entry per decision, with alternatives considered. Log any deviation from DESIGN.md there. Supersede old entries rather than rewriting them.
+6. **No ModelingToolkit, anywhere** (D-2).
+7. `docs/veinik/` belongs to the user. Change it only with the user's approval, and say exactly which lines changed.
+
+## End of every slice (do this without being asked)
+
+1. Full test suite passes; note the count and run time.
+2. Update `docs/STATUS.md`: rewrite it to the current state (not a log).
+3. Mark the slice done in DESIGN §15. Update any DESIGN text the implementation proved wrong, logging the change in DECISIONS.md.
+4. Update this file if the working rules changed.
+5. Commit on a feature branch (never directly on `master`/`main`), one commit per slice, with a message that lists what the slice added and its tests. Ask before merging or pushing.
 
 ## Existing library (reference only)
 
-The author has an earlier Julia thermal library (ThermalModeling / TSM). It is a conventional lumped-element code, not generalized the way this one should be. See `docs/EXISTING_LIBRARY.md` for when and how to use it. Short version: **do not read it until DESIGN.md is drafted, never mirror its architecture, and use it only for validated cases, correlations, property wrappers and lessons learned.**
+The author has an earlier Julia thermal library (ThermalModeling / TSM). It is a conventional lumped-element code, not generalized the way this one should be. See `docs/EXISTING_LIBRARY.md` for when and how to use it. Short version: **read it only in the review phase of `EXISTING_LIBRARY.md` (not started; the user decides when), never mirror its architecture, and use it only for validated cases, correlations, property wrappers and lessons learned.**
+
+## Source material (only when needed)
+
+Raw Veinik sources live in `_reference/veinik_source/` (git-ignored): OCR text of the whole 1964 book, page images, section notes, and the Russian 1966 and 1973 texts. Use them only to check what Veinik actually wrote or to verify an equation number; `docs/veinik/` remains the working reference. Read `_reference/veinik_source/README.md` first. OCR garbles equations, so open the page image when it matters.
