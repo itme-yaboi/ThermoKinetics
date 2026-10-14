@@ -26,7 +26,7 @@ Everything needed from Veinik's books is in `docs/veinik/`. **Do not ask for or 
 
 ## Non-negotiable physics
 
-1. Every non-thermal charge is conserved by every connection. **Entropy is the only charge with a source term, and that source is ≥ 0.** Never conserve entropy.
+1. Every non-thermal charge is conserved by every **connection between bodies**. Changes *inside* a body (chemical reactions, radioactive decay and transmutation such as tritium decay) are explicit internal transformations that conserve elements or total mass as appropriate. **Entropy *production* is ≥ 0**, and it is the only internal source of any charge. External sources (nuclear heating, prescribed cooling) are separate, explicit boundary or source terms, and their entropy can have either sign. Never conserve entropy.
 2. Energy is conserved across every connection. Dissipated energy re-enters as entropy at the temperature of the body where it is deposited.
 3. Forces are defined strictly as P = ∂U/∂E, so the volumetric force is −p. No per-domain sign exceptions.
 4. Static reciprocity comes from U being one potential (its Hessian is symmetric). Kinetic coefficient matrices L have a positive semidefinite symmetric part. L is symmetric unless a magnetic field is present (Onsager–Casimir).
@@ -35,9 +35,9 @@ Everything needed from Veinik's books is in `docs/veinik/`. **Do not ask for or 
 
 ## How to work
 
-1. **Design first.** Before implementation, write `docs/DESIGN.md`: types, state representation (charges-as-states versus forces-as-states, with the reasoning), assembly, solver strategy, and how each non-negotiable above is guaranteed structurally. Stop and ask for review of DESIGN.md before building past a minimal prototype.
+1. **Design first.** Before implementation, write `docs/DESIGN.md`: types, state representation (**charges-as-states is decided**, see `07` §1; design the Newton inversion for property backends), assembly, solver strategy, and how each non-negotiable above is guaranteed structurally. Stop and ask for review of DESIGN.md before building past a minimal prototype.
 2. **Tests alongside code.** Implement the invariant tests in `08_validation_cases.md` §A first, then the analytic cases, in roughly the order B → C → D → E.
-3. **Small vertical slices.** First slice: two thermal bodies plus a conductor (B2, C1, C2). Then add the volumetric domain and an ideal gas (B3, B4). Then a stream (B5, C7). Then coupled conductors (C4, C5).
+3. **Small vertical slices.** First slice: thermal bodies, fixed-temperature reservoirs, an energy-form thermal conductor (`07` §3), and a chain of cells for a discretized rod (B2, C1, C2). Then add the volumetric domain and an ideal gas (B3, B4). Then a stream (B5, C7). Then coupled conductors (C4, C5).
 4. When a book equation and a non-negotiable disagree, the non-negotiable wins. Note the disagreement in `docs/DECISIONS.md`.
 5. Keep a running `docs/DECISIONS.md`: one entry per design decision, with alternatives considered.
 
