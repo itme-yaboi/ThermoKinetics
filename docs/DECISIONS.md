@@ -254,7 +254,7 @@ Each item lists what was built instead of the design text, and why.
 ### D-23 Network plotting: Freivalds–Glagoļevs compact orthogonal layout — accepted (user, 2026-10-14); details proposed
 - **Chosen (user):**
   - Basic network plotting is part of the intended functionality.
-  - The layout implements the node-placement algorithm of Freivalds & Glagoļevs, *Graph Compact Orthogonal Layout Algorithm*. The local copy is `_reference/graphing/` (git-ignored).
+  - The layout implements the node-placement algorithm of Freivalds & Glagoļevs, *Graph Compact Orthogonal Layout Algorithm*. The local copy is `_reference/graphing/`, alongside Lengauer's book for routing and compaction.
   - Not implemented yet; specified in DESIGN §17 as plotting track P.
 - **Proposed details** (DESIGN §17), to settle when the track is built:
   - lay out the full bipartite graph (elements as small boxes), with an option to collapse two-port elements into edges;
@@ -268,6 +268,21 @@ Each item lists what was built instead of the design text, and why.
   - Graphviz `dot` with orthogonal splines — an external binary, with little control over node sizes and pinning;
   - plotting inside the core package — forces a plotting stack on every user.
 - **Why:** orthogonal, compact layouts with prescribed box sizes match how thermal and process schematics are drawn. The algorithm handles mixed node sizes, which the bipartite element graph needs. Keeping layout separate from rendering makes it testable and keeps the core light.
+
+### D-24 Track `_reference/` in git, except page images — accepted (user, 2026-10-14); supersedes part of D-18
+- **Chosen:**
+  - `.gitignore` no longer excludes `_reference/`. It excludes `_reference/veinik_source/page_images/`.
+  - The graphing references (Freivalds–Glagoļevs; Lengauer) and the Veinik OCR text and notes become trackable, so the paths cited in DESIGN §17 and CLAUDE.md resolve in every clone.
+  - D-18's other entries (`reference/`, `Manifest.toml`) stand.
+- **Alternatives:**
+  - keep `_reference/` ignored, so citations point at files only this machine has;
+  - Git LFS for the large PDFs (Lengauer is ~20 MB);
+  - track only a manifest of references (titles, sources), not the files.
+- **Caution, raised with the user before any `_reference` file was staged:**
+  - `_reference/` holds scanned or OCR'd copyrighted works (Veinik 1964; Lengauer 1990) whose own README says "keep out of git".
+  - Committing them puts copies in every clone and in history permanently, including if the repository is ever pushed or shared.
+  - The ~20 MB PDF also stays in history even if deleted later.
+  - Staging those files waits for the user's explicit go-ahead.
 
 ---
 

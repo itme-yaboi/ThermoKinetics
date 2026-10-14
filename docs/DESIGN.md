@@ -473,7 +473,7 @@ A basic network-plotting ability is part of the intended functionality (§0.1). 
 The layout **must** implement the node-placement algorithm in:
 
 > K. Freivalds and J. Glagoļevs, *Graph Compact Orthogonal Layout Algorithm*, Institute of Mathematics and Computer Science, University of Latvia.
-> Local copy (git-ignored): `_reference/graphing/Freivalds, Graph Compact Orthogonal Layout Algorith.pdf` (12 pages).
+> Local copy: `_reference/graphing/Freivalds, Graph Compact Orthogonal Layout Algorith.pdf` (12 pages).
 
 What the paper specifies, and what the implementation follows:
 - **Drawing model.** Nodes are rectangles of prescribed minimum size (w_i, h_i) with a minimum gap δ. Edges are orthogonal polylines. Only point-wise edge crossings are allowed.
@@ -494,15 +494,43 @@ What the paper specifies, and what the implementation follows:
   - The paper finds force-directed best. Use it once a force-directed placement is available; keep random as the fallback.
   - Use a seeded RNG so layouts are reproducible.
 
-What the paper **does not** specify (it cites other work), and the plan for it:
-- **Edge routing** ([14] Lengauer: integrated-circuit layout). Plan: shortest orthogonal routes on the cell grid (A* or Lee maze routing) with a bend penalty. Edges sharing a node side get spread ports.
-- **Normalization / overlap removal** ([7] Dwyer–Marriott–Stuckey; [10] Freivalds–Kikusts). Plan: reuse the compaction machinery, a 1-D quadratic objective with separation constraints, to push apart overlapping segments and nodes while minimizing movement.
-- **The QP solver for eq. (3)** ([10]). The constraints are pure difference constraints z_j − z_i ≥ d_ij, and the objective is a graph Laplacian plus small regularization. Options:
-  - (a) implement a small active-set / block-merging solver for separation constraints (Dwyer-style), keeping the dependency footprint small;
-  - (b) call a general QP solver.
+What the paper **does not** specify (it cites other work), and the plan for it.
+
+**Companion reference for routing and compaction** (the paper's [14]):
+
+> T. Lengauer, *Combinatorial Algorithms for Integrated Circuit Layout*, Wiley–Teubner (Applicable Theory in Computer Science), 1990/1992.
+> Local copy: `_reference/graphing/(Applicable Theory in Computer Science) Thomas Lengauer (auth.) - Combinatorial Algorithms for Integrated Circuit Layout-Vieweg+Teubner Verlag (1992).pdf` (714 PDF pages; **PDF page = printed page + 18**).
+
+| Need | Lengauer section | Printed pages (PDF pages) |
+|---|---|---|
+| Shortest paths, Dijkstra, goal-directed (A*-type) single-pair search | §3.8, esp. §3.8.4–3.8.5 | 61–78 (79–96) |
+| Maze running (Lee), coding techniques, goal-directed search, suboptimal paths | §8.4.1 | 395–400 (413–418) |
+| Line searching (Hightower, Mikami–Tabuchi) and the **track graph**: few-bend routes without a full grid | §8.4.2 | 400–409 (418–427) |
+| **Minimizing bends** via the edge-cost transformation of Fig. 8.12 (Dijkstra on an expanded grid) | §8.4.4 | 411–413 (429–431) |
+| Sequential routing of many nets (order, rip-up ideas) | §8.3–8.4 | 392–413 (410–431) |
+| Graph-based 1-D compaction (constraint graph, longest paths), **wire balancing** (minimize wire length subject to spacing) | §10.2.2, §10.2.2.3 | 596–619 (614–637) |
+| Quadratic optimization, gradient projection (for the eq. (3) QP) | §4.8.1, §4.8.3 | 204–210 (222–228) |
+| Simulated annealing and cooling schedules (background to Algorithm 1) | §4.3 | 144–160 (162–178) |
+
+The plan, by phase:
+- **Edge routing** (Lengauer §8.4):
+  - Route each port edge as a shortest orthogonal path on the grid left free by the placed boxes, with the bend-cost transformation of §8.4.4 (Fig. 8.12) so that length plus a bend penalty is minimized exactly by Dijkstra.
+  - Use goal-directed search (§3.8.5.1) for speed.
+  - If grids get large, switch to the track graph of §8.4.2.3.
+  - Edges sharing a node side get spread ports.
+- **Normalization / overlap removal** (the paper's [7] Dwyer–Marriott–Stuckey and [10] Freivalds–Kikusts; neither is in `_reference/`):
+  - reuse the compaction machinery, a 1-D quadratic objective with separation constraints, to push apart overlapping segments and nodes while minimizing movement;
+  - Lengauer's graph-based compaction (§10.2.2) gives the constraint-graph construction.
+- **The QP solver for eq. (3)** (the paper's [10], not in `_reference/`). The constraints are pure difference constraints z_j − z_i ≥ d_ij, and the objective is a graph Laplacian plus small regularization. Options:
+  - (a) a small gradient-projection / active-set solver (Lengauer §4.8.1, §4.8.3) whose projection step is the block-merging separation-constraint projection;
+  - (b) a general QP solver.
   - Decide at implementation time and log it in DECISIONS.
 
-These references are not in `_reference/`. Ask the user before relying on one; the plans above need nothing beyond standard textbook methods.
+**Still missing from `_reference/graphing/`** (the plans above work without them; they would sharpen the overlap-removal and QP steps):
+- T. Dwyer, K. Marriott, P. J. Stuckey, *Fast Node Overlap Removal*, Graph Drawing 2005, LNCS 3843, pp. 153–164 (the paper's [7]): the separation-constraint (VPSC) solver.
+- T. Dwyer, Y. Koren, K. Marriott, *IPSep-CoLa: An Incremental Procedure for Separation Constraint Layout of Graphs*, IEEE TVCG 12(5), 2006: gradient projection with separation constraints, which is the closest published match to solving eq. (3).
+- K. Freivalds, P. Kikusts, *Optimum Layout Adjustment Supporting Ordering Constraints*, Proc. Latvian Academy of Sciences B, 2001 (the paper's [10]): the solver the authors used. It may be hard to obtain; the two papers above cover the same ground.
+- *Optional:* T. C. Biedl, B. P. Madden, I. G. Tollis, *The Three-Phase Method: A Unified Approach to Orthogonal Graph Drawing*, GD 1997 (the paper's [3]): the phase structure and port assignment the paper builds on.
 
 ### 17.2 What gets drawn
 
