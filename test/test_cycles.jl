@@ -26,9 +26,9 @@
         connect!(sys, Switched(Conductor(ThermalConductance(G)); on = t -> leg(t) == 3), cold, gas; name = :coldc)
         cs = compile(sys)
         stops = collect(tl:tl:ncycles*period)
-        # ledger_control: the drive makes V linear in t and the adiabats keep S fixed, so without
-        # error control on the ledgers a whole leg is one step and ∫p dV is a one-step quadrature (D-29)
-        sol = simulate(cs, (0.0, ncycles * period); saveat = vcat(0.0, stops), tstops = stops, ledger_control = true)
+        # ledger control (the default) matters here: the drive makes V linear in t and the adiabats keep
+        # S fixed, so without it a whole leg is one step and ∫p dV a one-step quadrature (D-29, D-31)
+        sol = simulate(cs, (0.0, ncycles * period); saveat = vcat(0.0, stops), tstops = stops)
         # the last cycle, from ledger differences (periodic by then: each isotherm resets the gas)
         i0 = length(sol.t) - 4
         u(k) = sol.u[i0+k]

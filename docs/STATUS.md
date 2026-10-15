@@ -11,7 +11,6 @@
   - E3/E4;
   - the plotting track;
   - reactions and nuclear sources.
-- **Open question for the user:** should `ledger_control` default to `true`? (D-29 §11; it touches D-10.)
 - **Tests:** 184,615 checks pass in ~1.5 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
 ## What exists
@@ -25,7 +24,7 @@
 | Converters | `Converter(W, domains)` (antisymmetric W), `Gyrator`, `InductorBranch`; `Transformer` (index-reduced DAE, Baumgarte τ) | power-exact; converted totals are not conserved (by design) |
 | Flow | `Stream`, `IdealPump`, `FlowBoundary`, `PassThroughOutlet` | single species for pumps and boundaries |
 | Switching | `Switched(element; on = t -> Bool)` | discontinuities as `tstops`; evaluated as left limits |
-| Running | `simulate` (Rodas5P; mass-matrix DAE when junctions or transformers exist; `consistent_state`; inadmissible steps rejected, NaN on invalid trial stages; `ledger_control`); `steady_state` | |
+| Running | `simulate` (Rodas5P; mass-matrix DAE when junctions or transformers exist; `consistent_state`; inadmissible steps rejected, NaN on invalid trial stages; ledgers error-controlled by default with scaled tolerances, `atol_ledger` override); `steady_state` | tolerances: DESIGN §12.5 |
 | Results | as before, plus `algebraic_index`, `constraint_residual` | |
 | Spatial | `rod!` | |
 
@@ -56,7 +55,7 @@ Validation covered (`test/`):
 
 ## Known shortcuts and open items
 
-- **Ledger error control** is opt-in (`ledger_control = true`). Without it, ledgers are uncontrolled quadratures when the physical states are easy to integrate, as with a prescribed drive; `closure` reveals it (D-29 §11). Awaiting the user's decision on the default.
+- **Ledger error control** is on by default, with ledger tolerances scaled like the states (D-31). Overhead is 0–10 % except where it buys accuracy. When it is required vs. optional, and how to set tolerances: DESIGN §12.5 and the `simulate` docstring.
 - **Transformers** conserve power on the constraint manifold. The off-manifold mismatch stays at integrator tolerance, and the initial charges must satisfy the constraint (D-29 §1). DAE systems use a dense Jacobian.
 - **Not built yet:**
   - vector momentum;

@@ -362,7 +362,7 @@ Ledgers are pure quadratures that never feed back into the dynamics (D-10):
 
 **Separability:**
 - The ODE state is u = [u_phys; q_ledger]. The right-hand side computes physical rates and ledger rates in the same pass, into separate blocks.
-- **Error norm:** the integrator's `internalnorm` covers only u_phys, so ledgers never restrict step sizes.
+- **Error norm:** by default the integrator's `internalnorm` also covers the ledgers (`ledger_control = true`, D-31, superseding the exclusion in D-10). Their absolute tolerances are scaled like the states they account for (§12.5).
 - **Steady state:** solves only f_phys(u_phys) = 0. Ledger *rates* are reported at the solution; Ṡ_gen [W/K] per element is the steady-state loss map.
 - **Jacobian:** ledger columns are structurally zero (no feedback), and the sparsity prototype says so.
 
@@ -425,6 +425,58 @@ Dual-capable buffers use `PreallocationTools.DiffCache`. The Newton warm-start c
 ### 12.4 No ModelingToolkit (firm)
 
 The core is built directly on Graphs.jl/MetaGraphsNext.jl, OrdinaryDiffEq and NonlinearSolve. There is no symbolic layer and no generated code. No MTK backend or export is planned (D-2).
+
+### 12.5 Tolerances and ledger control (guidance, D-31)
+
+**What is controlled.** The integrator's error norm covers the bodies' charges, the algebraic
+unknowns, and, by default, the ledgers (`ledger_control = true`). `reltol` (default 1e-8)
+applies to all of them. The absolute tolerances (`abstol_vector`) are:
+
+| State | Absolute tolerance | Why |
+|---|---|---|
+| A body's charge (S, V, m, q, p, …) | its domain's force tolerance (`default_force_atol`: 1e-8 K, 1e-4 Pa, 1e-6 J/kg, 1e-8 V, 1e-9 m/s, …) divided by A_kk, i.e. times its capacity, at the initial state | resolves what matters (the force) and ignores charge magnitudes, since entropy has an arbitrary zero (D-20) |
+| Junction force | the domain's force tolerance | it *is* a force |
+| Transformer flux λ | 1e-10 | |
+| Entropy ledger (Ṡ_gen per element, entropy received) | the median body entropy tolerance | same resolution as the states it accounts for |
+| Energy ledger (energy received, external work) | that × the median body temperature | the energy equivalent |
+| Charge ledger (mass, volume, charge received) | the median body tolerance of that domain | |
+
+Ledgers start at zero, so a flat tiny absolute tolerance would force small steps for nothing.
+In the benchmark that cost a 300-cell slab 3× the steps; scaled, the overhead is gone.
+`atol_scale` multiplies every tolerance; `atol_ledger = x` replaces all ledger tolerances
+with x.
+
+**When ledger control is required.** Keep the default (on) whenever ledger values are used:
+losses per element, exergy destruction, heat or work delivered, efficiencies, closure. It is
+indispensable when the physical states are easy to integrate but a ledger integrand is not:
+- prescribed drives and time-varying reservoirs: V linear in t, while the work integrand p·w
+  varies;
+- isentropic or adiabatic legs, where S is constant but p changes;
+- switched cycles, and long runs that accumulate ledgers;
+- differences of large ledgers, such as the lost work Q_h η_C − W.
+
+Measured on the Carnot cycle, turning it off left the work 0.24 % wrong (closure 2.4e-3); on, it
+is exact to 4e-9.
+
+**When it may be turned off.** Only when you need just the physical trajectories
+(temperatures, pressures, flows) and not the ledgers, or for a very large model where the
+ledger integrands track the states (conduction, diffusion) and every millisecond matters. Then
+always check `closure(cs, sol)`. `energy_rel` within about 10× `reltol` means the ledgers are
+still sound.
+
+**Measured cost** (on vs off, after warm-up):
+- conduction, diffusion, gas networks, heat exchangers, RLC: 0–10 %;
+- prescribed-drive Carnot: 2.3×, which is exactly the cost of getting its work ledger right.
+
+**Handling tolerances in practice:**
+- *Loss of a small difference of large quantities* (lost work, small heat leaks): its relative
+  error is about `reltol` × (large quantity)/(difference). Tighten `reltol` so that is small
+  enough.
+- *Many steps while ledgers are still near zero:* loosen `atol_ledger`, or check that the bodies'
+  force tolerances suit the problem (`atol_scale`).
+- *A ledger near zero that matters* (a tiny leak): tighten `atol_ledger`.
+- *Closure worse than expected:* check that `ledger_control` is on and that discontinuities are
+  passed as `tstops`. Then tighten `reltol`.
 
 ## 13. Structural guarantees for the non-negotiables
 

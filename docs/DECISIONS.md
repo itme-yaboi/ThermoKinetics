@@ -412,8 +412,35 @@ Each item lists what was built instead of the design text, and why.
       - Example: a prescribed drive makes V linear in t while the adiabats keep S fixed, so each 100 s leg is one step.
       - Measured on the Carnot cycle: W off by 2–5 % (closure 2e-3 to 5e-3) without control; with control, W = Q_h − Q_c to 1e-8 (closure 4e-9).
     - Built: `simulate(…; ledger_control = true)` adds the ledgers to the error norm (they still never feed back, and steady solves still exclude them). The default stays `false` per D-10.
-    - **Recommendation:** make `true` the default. Correctness and loss attribution matter more than speed, and `closure` exposes the problem but does not prevent it.
+    - **Resolved by D-31:** `true` is now the default, with scaled ledger tolerances.
+    - **Recommendation (adopted):** make `true` the default. Correctness and loss attribution matter more than speed, and `closure` exposes the problem but does not prevent it.
     - Alternative: post-hoc high-order quadrature of the ledgers from dense output.
+
+### D-31 Ledgers are error-controlled by default, with scaled tolerances — accepted (user, 2026-10-14); supersedes the error-norm part of D-10 and resolves D-29 §11
+- **Chosen:**
+  - `simulate(…; ledger_control = true)` by default: ledgers are in the integrator's error norm. They still never feed back into the dynamics, and steady solves still exclude them.
+  - Ledger absolute tolerances are scaled like the states they account for, per ledger kind recorded at compile time (`ledger_kind`):
+    - entropy-type: the median body entropy tolerance;
+    - energy-type: that × the median body temperature (the reservoirs' temperatures if there are no thermal bodies);
+    - charge-type: the median body tolerance of that domain.
+  - `atol_ledger = x` overrides. Guidance is in DESIGN §12.5 and the `simulate` docstring.
+- **Measured** (on vs off, after warm-up; on uses the scaled tolerances):
+
+  | Model | Steps (off → on) | Time | Energy closure (off → on) |
+  |---|---|---|---|
+  | slab, 300 cells | 143 → 143 | same | 9e-11 → 9e-11 |
+  | rod, 25 cells | 157 → 162 | +1 % | 4e-12 → 3e-12 |
+  | gas network | 205 → 210 | same | 6e-11 → 2e-11 |
+  | heat exchanger | 212 → 221 | +9 % | 2e-14 → 2e-14 |
+  | RLC (DAE) | 411 → 382 | −4 % | 4e-9 → 5e-9 |
+  | Carnot drive | 254 → 568 | 2.3× | **2.4e-3 → 4e-9** |
+
+  With a flat ledger tolerance of 1e-12 instead, the slab took 3.3× and the rod 1.4× for no accuracy gain.
+- **Alternatives:**
+  - keep ledgers out of the norm (D-10): fastest, but loss figures can be wrong by percent with no warning other than `closure`;
+  - post-hoc high-order quadrature of ledgers from dense output: accurate, but every element's ledger integrand must be re-evaluated, and it does not compose with event handling;
+  - a flat ledger tolerance: simple, but wastes steps while ledgers are near zero.
+- **Why:** loss attribution is a consulting deliverable (CLAUDE.md). Correctness should be the default, and the measured overhead is small except where it buys accuracy.
 
 ---
 

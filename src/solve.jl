@@ -33,29 +33,58 @@ end
 (pn::PhysNorm)(u::Number, t) = abs(u)
 
 """
-    abstol_vector(cs; atol_scale = 1.0, atol_ledger = 1e-12)
+    abstol_vector(cs; atol_scale = 1.0, atol_ledger = nothing)
 
-Absolute tolerance per state. Each charge is resolved to the equivalent of its domain's
-force tolerance (`default_force_atol`, times `atol_scale`) through its capacity 1/A_kk at
-the initial state. Charge magnitudes are not used: entropy has an arbitrary zero (D-20).
+Absolute tolerance per state (DESIGN §12.5, D-31).
+- **Charges** are resolved to the equivalent of their domain's force tolerance
+  (`default_force_atol`, times `atol_scale`) through their capacity 1/A_kk at the initial state:
+  1e-8 K of temperature, 1e-4 Pa of pressure, 1e-8 V, … Charge magnitudes are not used,
+  because entropy has an arbitrary zero (D-20).
+- **Junction forces:** the domain's force tolerance. **Transformer fluxes:** 1e-10 × `atol_scale`.
+- **Ledgers** are scaled like the states they account for. Entropy ledgers (production,
+  entropy received) get the median body entropy tolerance; energy ledgers get that times the
+  median body temperature; charge ledgers get the median body tolerance of that domain.
+  Ledgers start at zero, so a flat tiny value would force small steps for nothing.
+  `atol_ledger = x` sets all ledger tolerances to `x` instead.
 """
-function abstol_vector(cs::CompiledSystem; atol_scale::Real = 1.0, atol_ledger::Real = 1e-12)
-    tol = fill(Float64(atol_ledger), nstate(cs) + cs.nledger)
+function abstol_vector(cs::CompiledSystem; atol_scale::Real = 1.0, atol_ledger = nothing)
+    tol = fill(1e-12 * atol_scale, nstate(cs) + cs.nledger)
     for (j, jn) in enumerate(cs.junctions), (k, d) in enumerate(jn.domains)   # junction forces
         tol[cs.junction_slots[j][k][2]] = atol_scale * default_force_atol(d)
     end
     for c in cs.transformers                                                   # transformer fluxes
         tol[c.λ] = atol_scale * 1e-10
     end
+    by_domain = Dict{FormOfMotion,Vector{Float64}}()
+    temperatures = Float64[]
     for (i, b) in enumerate(cs.bodies)
         off = cs.body_offset[i]
         N = ncharges(b.material)
         E = cs.u0[off:off+N-1]
         A = eos_matrix(b.material, E)
+        F = forces(b.material, E)
         for (k, d) in enumerate(domains(b.material))
             t = atol_scale * default_force_atol(d) / abs(A[k, k])
             tol[off+k-1] = (isfinite(t) && t > 0) ? t : 1e-12 * max(abs(E[k]), 1.0)
+            push!(get!(by_domain, d, Float64[]), tol[off+k-1])
+            d isa Thermal && push!(temperatures, F[k])
         end
+    end
+    # ledgers: scaled like the states they account for
+    med(v) = (w = sort(v); n = length(w); isodd(n) ? w[(n+1)÷2] : (w[n÷2] + w[n÷2+1]) / 2)
+    if isempty(temperatures)                       # no thermal bodies: use the reservoirs' temperatures
+        for r in cs.reservoirs, (d, f) in zip(r.domains, r.forces)
+            d isa Thermal && push!(temperatures, f)
+        end
+    end
+    T_ref = isempty(temperatures) ? 300.0 : med(temperatures)
+    ref_S = haskey(by_domain, Thermal()) ? med(by_domain[Thermal()]) : 1e-12 * atol_scale
+    for (i, kind) in enumerate(cs.ledger_kind)
+        slot = nstate(cs) + i
+        tol[slot] = atol_ledger !== nothing ? Float64(atol_ledger) :
+                    kind === :S ? ref_S :
+                    kind === :U ? ref_S * T_ref :
+                    haskey(by_domain, kind) ? med(by_domain[kind]) : 1e-12 * atol_scale
     end
     return tol
 end
@@ -114,21 +143,34 @@ function consistent_state(cs::CompiledSystem, u::AbstractVector; t::Real = 0.0)
 end
 
 """
-    simulate(cs, tspan; alg = Rodas5P(), reltol = 1e-8, atol_scale = 1.0, sparse, kwargs...)
+    simulate(cs, tspan; alg = Rodas5P(), reltol = 1e-8, atol_scale = 1.0, ledger_control = true,
+             atol_ledger = nothing, sparse, kwargs...)
 
-Integrate with the ledger states excluded from the error norm. Steps that would leave a
-material's valid states (e.g. a gas with V ≤ 0), or push a passive boundary uphill, are
-rejected. Pass the discontinuities of time-varying reservoir forces and `Switched` gates as
-`tstops`: they are evaluated as left limits up to each stop (D-29).
+Integrate the compiled system. Other keywords (`saveat`, `tstops`, `callback`, …) go to `solve`.
+- Steps that would leave a material's valid states (e.g. a gas with V ≤ 0), or push a passive
+  boundary uphill, are rejected.
+- Pass the discontinuities of time-varying reservoir forces and `Switched` gates as `tstops`:
+  they are evaluated as left limits up to each stop (D-29).
 
-`ledger_control = true` puts the ledgers under error control too (D-29 §10). It is needed
-whenever the ledger integrands vary while the physical states are easy to integrate, e.g. a
-prescribed drive: otherwise the ledgers are uncontrolled quadratures, and `closure` shows it. Other keywords (for example
-`saveat`) go to `solve`.
+**Ledgers and tolerances** (DESIGN §12.5, D-31):
+- `ledger_control = true` (default): the ledgers (entropy produced per element; charge, energy
+  and entropy received by reservoirs and boundaries; external work) are in the integrator's
+  error norm, so the losses it reports are as accurate as the states. Ledgers never feed back
+  into the dynamics, and steady solves exclude them.
+- `ledger_control = false` only when you need just the physical trajectories. Then check that
+  `closure(cs, sol).energy_rel` is small: ledgers are uncontrolled quadratures and can be off by
+  percent when the states are easy to integrate but the ledger integrands are not (a
+  prescribed drive).
+- `reltol` applies to everything. Absolute tolerances come from `abstol_vector`: charges from
+  force tolerances (`atol_scale` scales them all), ledgers scaled like the states. To compare
+  small differences of large ledgers (lost work = Q_h η_C − W), the relative error of the
+  difference is about `reltol` × Q/ΔQ, so tighten `reltol` accordingly.
+- `atol_ledger = x` overrides the ledger tolerances. Loosen it if steps stay small while ledgers
+  are near zero; tighten it if ledgers near zero matter.
 """
 function simulate(cs::CompiledSystem, tspan; alg = Rodas5P(), reltol::Real = 1e-8, atol_scale::Real = 1.0,
                   u0 = initial_state(cs), sparse::Bool = cs.nphys > 50 && cs.nalg == 0,
-                  ledger_control::Bool = false, kwargs...)
+                  ledger_control::Bool = true, atol_ledger = nothing, kwargs...)
     u0 = consistent_state(cs, u0; t = first(tspan))
     prob = SciMLBase.ODEProblem(cs, tspan; u0, sparse)
     extra = cs.nalg == 0 ? (;) : (; initializealg = SciMLBase.NoInit())     # u0 is already consistent
@@ -142,7 +184,7 @@ function simulate(cs::CompiledSystem, tspan; alg = Rodas5P(), reltol::Real = 1e-
     cb = haskey(kwargs, :callback) ? SciMLBase.CallbackSet(kwargs[:callback], advance) : advance
     rest = Base.structdiff(values(kwargs), NamedTuple{(:callback,)})
     sol = try
-        SciMLBase.solve(prob, alg; reltol, abstol = abstol_vector(cs; atol_scale),
+        SciMLBase.solve(prob, alg; reltol, abstol = abstol_vector(cs; atol_scale, atol_ledger),
                         internalnorm = PhysNorm(ledger_control ? length(u0) : nstate(cs)), callback = cb,
                         isoutofdomain = (u, p, t) -> !admissible(p, u), extra..., rest...)
     finally

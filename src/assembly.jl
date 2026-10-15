@@ -285,6 +285,7 @@ struct CompiledSystem
     nledger::Int
     u0::Vector{Float64}
     Pbuf::Vector{Float64}
+    ledger_kind::Vector{Any}            # per ledger slot: :S (entropy), :U (energy) or the charge's domain
     tbreak::Base.RefValue{Float64}      # next discontinuity: time functions are left limits up to it
 end
 
@@ -427,6 +428,33 @@ function compile(sys::ThermoSystem)
     node_T = [force_index(i, Thermal()) for i in 1:nn]
     node_S = [charge_target(i, Thermal()) for i in 1:nn]
     node_U = [nb < i <= nb + nr ? res_led[i-nb] + length(reservoirs[i-nb].domains) : 0 for i in 1:nn]
+
+    # what each ledger slot measures (sets its integrator tolerance, D-31)
+    ledger_kind = Vector{Any}(undef, nledger_total)
+    setkind!(i, k) = (ledger_kind[i-nphys-nalg] = k)
+    for e in elem_labels
+        el = unwrap(g[e])
+        r = elem_led[e]
+        isempty(r) && continue
+        kinds = if el isa Conductor || el isa Stream
+            fill(:S, length(r))
+        elseif el isa IdealPump
+            Any[:S, :U]
+        elseif el isa FlowBoundary
+            vcat(Any[:S, :U], Any[d for d in domains(el.material) if d isa Species], Any[:S, :U])
+        elseif el isa PassThroughOutlet
+            vcat(Any[d for d in species_of(node_index[port_node(sys, e, :a)])], Any[:S, :U])
+        else
+            error("internal: no ledger kinds for $(typeof(el))")
+        end
+        foreach(((i, k),) -> setkind!(i, k), zip(r, kinds))
+    end
+    for (j, rr) in enumerate(reservoirs)
+        for (k, d) in enumerate(rr.domains)
+            setkind!(res_led[j] + k - 1, d isa Thermal ? :S : d)
+        end
+        setkind!(res_led[j] + length(rr.domains), :U)
+    end
 
     compiled = Any[]
     conductor_labels = Symbol[]
@@ -630,7 +658,7 @@ function compile(sys::ThermoSystem)
                           node_T, node_S, node_U,
                           elem_labels, element_ref, conductor_labels, prod_led, work_led, bound_led, ext_charges,
                           touch, moves, sort(collect(active_set)),
-                          node_index, nphys, nalg, nledger_total, u0, Pbuf, Ref(Inf))
+                          node_index, nphys, nalg, nledger_total, u0, Pbuf, ledger_kind, Ref(Inf))
 end
 
 # --- the right-hand side ------------------------------------------------------------------------
