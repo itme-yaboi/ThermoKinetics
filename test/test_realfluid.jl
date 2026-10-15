@@ -181,7 +181,9 @@
         vmid = sqrt(vl * vv) / Mw                                  # m³/kg, between saturated liquid and vapor
         Eliq = charges_at(f; T = 400.0, p = ps * 1.5, m = 0.5)     # compressed liquid, for a plausible S
         Edome = [Eliq[1], vmid * 0.5, 0.5]                         # 400 K is below T_c; v inside the dome
-        @test !valid_state(f, Edome)
+        # since slice 10b a pure fluid in the dome is a valid saturated mixture (test_twophase.jl)
+        @test valid_state(f, Edome)
+        @test 0 < quality(f, Edome) < 1
         @test valid_state(f, Eliq)
         @test valid_state(f, charges_at(f; T = 400.0, p = ps * 0.5, m = 0.5))        # superheated vapor
         Ev = Vector(Eliq)

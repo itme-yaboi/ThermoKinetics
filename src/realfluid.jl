@@ -18,12 +18,13 @@ Charges (S, V, m₁ … m_n), domains (Thermal, Volumetric, Species…), one cou
 an ideal gas. U(S, V, m) = A(T, V, n) + T S, with A = `Clapeyron.eos(model, V, T, n)` (the
 volume-based Helmholtz energy, the only Clapeyron entry point of the state function) and T
 from S = −∂A/∂T by safeguarded Newton; derivatives come from the implicit-function theorem, so
-forces and the Hessian are exact (§2.4). Single phase only: a pure-fluid state inside the
-two-phase dome is not a valid state (slice 10b adds the flash). The entropy and energy datums
+forces and the Hessian are exact (§2.4). A pure-fluid state inside the two-phase dome is a
+saturated mixture (DESIGN §2.6): T from the lever rule, forces T, −p_sat, μ_sat, and `quality`
+gives its vapour fraction; mixtures are single-phase only. The entropy and energy datums
 are the model's own, so one species must not be held by two different backends in a model.
 
 `charges_at(fluid; T, p or V, m)` builds charges (`m` a number for one component, else a
-NamedTuple by species).
+NamedTuple by species); `charges_at(fluid; T or p, x, m)` a saturated mixture of quality x.
 """
 function RealFluid end
 
@@ -41,3 +42,17 @@ mixture_isentropic(::Material) = false
 
 "`isentropic_state` with a composition: single-species materials ignore it."
 isentropic_state(mat::Material, s, p, y) = isentropic_state(mat, s, p)
+
+"""
+    quality(material, E) -> Real or nothing
+
+The vapour mass fraction of a two-phase state of a pure fluid (in [0, 1]), or `nothing` for a
+single-phase state or a material without phases.
+"""
+quality(::Material, E) = nothing
+
+"""
+The specific entropy [J/(kg K)] of what a `draw` takes from a body with charges E: the mean
+S/m for `:mixture` or a single-phase state, the saturated phase's otherwise (D-52).
+"""
+drawn_entropy(mat::Material, E, draw::Symbol) = E[thermal_slot(mat)] / sum(E[k] for k in mass_slots(mat))

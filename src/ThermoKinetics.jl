@@ -49,7 +49,7 @@ export Material, ConstantCapacitySolid, IdealGas, ElasticVolume, LinearCapacitor
        LinearInductor, LinearSpring, TorsionSpring, PendulumPotential, Composite, EntropicCharge,
        domains, internal_energy, forces, eos_matrix, temperature, pressure, charges_at,
        capacity_matrix, is_stable, valid_state, mass_slots,
-       SpeciesData, IdealGasMixture, IdealSolution, molar_mass, nucleons, species_names, species_data, Moving, RealFluid
+       SpeciesData, IdealGasMixture, IdealSolution, molar_mass, nucleons, species_names, species_data, Moving, RealFluid, quality
 # elements
 export Body, Reservoir, ThermalConductance, VolumeConductance, LinearConductance, Resistor, MassConductance,
        ThermoelectricConductance, KnudsenBarrier, OnsagerConductance, Conductor, Split, Into, InternalNode,

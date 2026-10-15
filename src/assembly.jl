@@ -152,6 +152,7 @@ struct CompiledStream{D,N}
     ya::NTuple{N,Int}; yb::NTuple{N,Int}
     wa::Int; wb::Int                # force index of w at each end (0: neither end moves)
     cwa::Int; cwb::Int              # momentum charge targets
+    draw::Symbol                    # what leaves a two-phase upstream body (D-52)
     led::Int                        # Ṡ_gen
 end
 
@@ -165,6 +166,7 @@ struct CompiledPump{F,M,N}
     ca::NTuple{N,Int}; cb::NTuple{N,Int}
     ya::NTuple{N,Int}
     wa::Int; wb::Int; cwa::Int; cwb::Int   # momentum rows (0: neither end moves)
+    draw::Symbol
     led::Int                        # Ṡ_gen, then external work
 end
 
@@ -679,7 +681,7 @@ function compile(sys::ThermoSystem)
             ya = ntuple(k -> yindex(ia, sp[k]), N)
             if el isa Stream
                 c = CompiledStream(e, el.driver, ia, ib, force_index(ia, Volumetric()), force_index(ib, Volumetric()),
-                                   fa, fb, ca, cb, ya, ntuple(k -> yindex(ib, sp[k]), N), wa, wb, cwa, cwb, first(r))
+                                   fa, fb, ca, cb, ya, ntuple(k -> yindex(ib, sp[k]), N), wa, wb, cwa, cwb, el.draw, first(r))
             else
                 up = node_obj(ia)
                 mat = fluid_material(up.material)
@@ -687,7 +689,7 @@ function compile(sys::ThermoSystem)
                     throw(ArgumentError("ideal pump :$e: a multi-species fluid needs a material with a mixture isentropic state " *
                                         "(a RealFluid); $(typeof(mat)) has none"))
                 c = CompiledPump(e, el.mdot, mat, ia, ib, force_index(ib, Volumetric()), fa, fb, ca, cb, ya,
-                                 wa, wb, cwa, cwb, first(r))
+                                 wa, wb, cwa, cwb, el.draw, first(r))
                 work_led[e] = first(r) + 1
             end
             push!(compiled, c)
@@ -966,6 +968,23 @@ end
     return nothing
 end
 
+"""
+The specific entropy of what a phase-selective draw takes from body `i` (a dynamic dispatch on
+its material, made only when the draw is not `:mixture`).
+"""
+function _drawn_s(cs::CompiledSystem, u, i::Int, draw::Symbol)
+    b = cs.bodies[i]
+    off = cs.body_offset[i]
+    N = ncharges(b.material)
+    return drawn_entropy(b.material, SVector{N}(ntuple(k -> u[off+k-1], N)), draw)
+end
+
+@inline function _upstream(cs::CompiledSystem, u, i::Int, c::NTuple{N,Int}, yi::NTuple{N,Int}, draw::Symbol) where {N}
+    s, y = _upstream(cs, u, i, c, yi)
+    (draw === :mixture || i > nbodies(cs)) && return (s, y)
+    return (oftype(s, _drawn_s(cs, u, i, draw)), y)
+end
+
 "Specific entropy and mass fractions of the fluid at node `i` (the upstream state)."
 @inline function _upstream(cs::CompiledSystem, u, i::Int, c::NTuple{N,Int}, yi::NTuple{N,Int}) where {N}
     Tel = promote_type(eltype(u), Float64)
@@ -1040,7 +1059,7 @@ Q_dn = D − Q_up. Production [D + J_s (T_up − T_dn)]/T_dn.
 function transfer(c::CompiledStream{D,N}, P, u, cs::CompiledSystem, t) where {D,N}
     mdot = mass_flow(c.driver, -P[c.pa], -P[c.pb])
     fwd = mdot >= 0
-    s_up, y = fwd ? _upstream(cs, u, c.a, c.ca, c.ya) : _upstream(cs, u, c.b, c.cb, c.yb)
+    s_up, y = fwd ? _upstream(cs, u, c.a, c.ca, c.ya, c.draw) : _upstream(cs, u, c.b, c.cb, c.yb, c.draw)
     J = SVector{N}(ntuple(k -> mdot * y[k], Val(N)))
     Js = mdot * s_up
     Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)
@@ -1066,7 +1085,7 @@ External work W = E* − E_a, where E = Σ μ J + T J_s at each state.
 """
 function transfer(c::CompiledPump{F,M,N}, P, u, cs::CompiledSystem, t) where {F,M,N}
     mdot = _nonneg_flow(c.mdot(t), "pump")
-    s_a, y = _upstream(cs, u, c.a, c.ca, c.ya)
+    s_a, y = _upstream(cs, u, c.a, c.ca, c.ya, c.draw)
     J = SVector{N}(ntuple(k -> mdot * y[k], Val(N)))
     Js = mdot * s_a
     Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)

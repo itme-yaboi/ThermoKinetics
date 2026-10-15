@@ -551,9 +551,23 @@ mass and the entropy ṁ s, evaluated at the upstream state (upwinding). Volume 
 advected into a fixed control volume. The downstream node receives the mass at its own μ,
 and the rest of the carried energy ṁ h_u as entropy at its own T. The generation
 ṁ[s_u(T_u − T_d) + Σ y(μ_u − μ_d)]/T_d is booked on the stream.
+
+`draw` (DESIGN §2.6, D-52) picks what leaves a two-phase upstream body: `:mixture` (default,
+the body's mean state), `:liquid` or `:vapor` (the saturated phase: its specific entropy, the
+same μ). A real plant has a trap; `:mixture` models it failing. From a single-phase body every
+draw takes the body's own state. It applies to whichever end is upstream.
 """
 struct Stream{D<:FlowDriver}
     driver::D
+    draw::Symbol
+    function Stream(driver::FlowDriver; draw::Symbol = :mixture)
+        return new{typeof(driver)}(driver, _check_draw(draw))
+    end
+end
+
+function _check_draw(draw::Symbol)
+    draw in (:mixture, :liquid, :vapor) || throw(ArgumentError("draw must be :mixture, :liquid or :vapor, got :$draw"))
+    return draw
 end
 
 """
@@ -563,9 +577,14 @@ Work-supplied flow from port a to port b at a prescribed ṁ = mdot(t) ≥ 0 [kg
 the pressures (D-13). The fluid is raised isentropically from p_a to p_b: the delivered state
 is (s_a, p_b), and the shaft work ṁ (h(s_a, p_b) − h_a) is booked as external work. Negative
 work, with flow down the gradient, is an ideal turbine.
+
+`draw = :liquid` or `:vapor` takes one saturated phase from a two-phase upstream body (a feed
+pump on a condenser hotwell, a turbine on a boiler drum); `:mixture` (default) its mean state.
 """
 struct IdealPump{F}
     mdot::F
+    draw::Symbol
+    IdealPump(mdot; draw::Symbol = :mixture) = new{typeof(mdot)}(mdot, _check_draw(draw))
 end
 
 """

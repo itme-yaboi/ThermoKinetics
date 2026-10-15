@@ -1008,3 +1008,126 @@ end
         @test 520 < st.T < 550                                    # superheated at 1.4 MPa (T_sat = 468 K): ≈ 262 °C
     end
 end
+
+@testset "applications: two-phase water and the ideal Rankine cycle (slice 10b)" begin
+    # Independent reference: Clapeyron's saturation solver and its pressure-based (p, T) functions,
+    # with temperatures found here by bisection. The library goes through its own flash on the
+    # volume-based Helmholtz energy (D-50, D-52).
+    mdl = Clapeyron.IAPWS95()
+    water = RealFluid(mdl; species = :H2O)
+    M = water.M[1]
+    function bisect(g, lo, hi)                                   # g increasing, root in [lo, hi]
+        for _ in 1:200
+            mid = (lo + hi) / 2
+            g(mid) > 0 ? (hi = mid) : (lo = mid)
+        end
+        return (lo + hi) / 2
+    end
+    Tsat(p) = bisect(T -> Clapeyron.saturation_pressure(mdl, T)[1] - p, 280.0, 640.0)
+    "Saturated-phase properties per kg at T: p, v, h, s, u of liquid (l) and vapour (v)."
+    function sat(T)
+        ps, vl, vv = Clapeyron.saturation_pressure(mdl, T)
+        return (; ps, vl = vl / M, vv = vv / M,
+                hl = Clapeyron.VT_enthalpy(mdl, vl, T) / M, hv = Clapeyron.VT_enthalpy(mdl, vv, T) / M,
+                sl = Clapeyron.VT_entropy(mdl, vl, T) / M, sv = Clapeyron.VT_entropy(mdl, vv, T) / M,
+                ul = Clapeyron.VT_internal_energy(mdl, vl, T) / M, uv = Clapeyron.VT_internal_energy(mdl, vv, T) / M)
+    end
+    h_pT(p, T) = Clapeyron.enthalpy(mdl, p, T) / M
+    s_pT(p, T) = Clapeyron.entropy(mdl, p, T) / M
+
+    @testset "Çengel 9e Example 3-6: superheated steam cooled in a rigid vessel into the dome" begin
+        # 1 lbm of water in a 2.29 ft³ rigid vessel at 250 psia, cooled to 100 °F (in SI)
+        m, V = 0.45359237, 2.29 * 0.3048^3
+        p1, T_res = 250 * 6894.757, (100 - 32) / 1.8 + 273.15
+        T1 = bisect(T -> -forces(water, charges_at(water; T, V, m))[2] - p1, 480.0, 700.0)
+        @test T1 ≈ (550 - 32) / 1.8 + 273.15 rtol = 1e-3       # Table A-6E: 550 °F
+        E1 = charges_at(water; T = T1, V, m)
+        @test quality(water, E1) === nothing                     # superheated
+        sys = ThermoSystem()
+        add!(sys, Body(:vessel, water, E1))
+        add!(sys, Reservoir(:room; T = T_res))
+        connect!(sys, Conductor(ThermalConductance(50.0)), :room, :vessel; name = :wall)
+        cs = compile(sys)
+        sol = simulate(cs, (0.0, 2e5))
+        uf = sol.u[end]
+        E2 = charges(cs, uf, :vessel)
+        @test ThermoKinetics.temperature(cs, uf, :vessel) ≈ T_res rtol = 1e-9
+        sp = sat(T_res)
+        x2 = (V / m - sp.vl) / (sp.vv - sp.vl)                   # the volume is fixed: the lever rule
+        @test quality(water, E2) ≈ x2 rtol = 1e-6
+        @test ThermoKinetics.pressure(cs, uf, :vessel) ≈ sp.ps rtol = 1e-7
+        @test ThermoKinetics.pressure(cs, uf, :vessel) ≈ 0.9505 * 6894.757 rtol = 2e-3   # Table A-4E
+        # heat removed: m(u1 − u2), with u2 from the saturated phases
+        u1 = Clapeyron.VT_internal_energy(mdl, V / m * M, T1) / M
+        u2 = (1 - x2) * sp.ul + x2 * sp.uv
+        @test reservoir_ledger(cs, uf, :room).U ≈ m * (u1 - u2) rtol = 1e-6
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9
+    end
+
+    @testset "Çengel 9e Example 10-1: the simple ideal Rankine cycle, 3 MPa 350 °C, 75 kPa" begin
+        p_b, T_b, p_c = 3e6, 623.15, 75e3
+        T_c = Tsat(p_c)
+        mdot, G, Vb, Vc = 0.01, 1e6, 0.05, 0.05
+        Eb = charges_at(water; T = T_b, p = p_b, m = 1.0)
+        Ec = charges_at(water; p = p_c, x = 0.1, m = 1.0)
+        @test quality(water, Ec) ≈ 0.1 rtol = 1e-9
+        sys = ThermoSystem()
+        add!(sys, Body(:boiler, water, Eb .* (Vb / Eb[2])))        # superheated
+        add!(sys, Body(:condenser, water, Ec .* (Vc / Ec[2])))     # a saturated mixture
+        add!(sys, Reservoir(:furnace; T = T_b))
+        add!(sys, Reservoir(:river; T = T_c))
+        connect!(sys, Conductor(ThermalConductance(G)), :furnace, :boiler; name = :heater)
+        connect!(sys, Conductor(ThermalConductance(G)), :condenser, :river; name = :cooler)
+        connect!(sys, IdealPump(t -> mdot), :boiler, :condenser; name = :turbine)
+        connect!(sys, IdealPump(t -> mdot; draw = :liquid), :condenser, :boiler; name = :feed)
+        cs = compile(sys)
+        sol = simulate(cs, (0.0, 20.0); saveat = [20.0])
+        u = sol.u[end]
+        du = rates(cs, u)
+        W = pump_work(cs, du)
+        Qin = -reservoir_ledger(cs, du, :furnace).U
+        Qout = reservoir_ledger(cs, du, :river).U
+        @test quality(water, charges(cs, u, :condenser)) !== nothing
+
+        # by hand, from the bodies' actual states (the conductances are stiff, not infinite)
+        T3, p3 = ThermoKinetics.temperature(cs, u, :boiler), ThermoKinetics.pressure(cs, u, :boiler)
+        T1 = ThermoKinetics.temperature(cs, u, :condenser)
+        sp = sat(T1)
+        @test ThermoKinetics.pressure(cs, u, :condenser) ≈ sp.ps rtol = 1e-8
+        h1, s1 = sp.hl, sp.sl                                    # saturated liquid from the hotwell
+        T2 = bisect(T -> s_pT(p3, T) - s1, T1 - 5, T1 + 5)       # isentropic compression
+        h2 = h_pT(p3, T2)
+        h3, s3 = h_pT(p3, T3), s_pT(p3, T3)
+        x4 = (s3 - sp.sl) / (sp.sv - sp.sl)                      # wet exhaust at the condenser's T
+        h4 = sp.hl + x4 * (sp.hv - sp.hl)
+        @test W[:feed] ≈ mdot * (h2 - h1) rtol = 1e-6
+        @test -W[:turbine] ≈ mdot * (h3 - h4) rtol = 1e-6
+        @test ThermoKinetics._eval(cs, u, :turbine).T_star ≈ T1 rtol = 1e-9   # delivered at T_sat
+        @test Qin ≈ mdot * (h3 - h2) rtol = 1e-6
+        Wnet = -(W[:turbine] + W[:feed])
+        @test Wnet ≈ Qin - Qout rtol = 1e-6                      # first law over the steady loop
+        η = Wnet / Qin
+
+        # vs the textbook (steam tables): h1 = 384.44, w_pump = 3.03, h3 = 3116.1 kJ/kg, s3 = 6.7450
+        # kJ/(kg K), x4 = 0.8861, h4 = 2403.0 kJ/kg, w_net = 710.0 kJ/kg, η = 0.260
+        @test h1 ≈ 384.44e3 rtol = 2e-3
+        @test (h2 - h1) ≈ 3.03e3 rtol = 1e-2
+        @test h3 ≈ 3116.1e3 rtol = 1e-3
+        @test s3 ≈ 6.7450e3 rtol = 1e-3
+        @test x4 ≈ 0.8861 rtol = 2e-3
+        @test h4 ≈ 2403.0e3 rtol = 2e-3
+        @test Wnet / mdot ≈ 710.0e3 rtol = 5e-3
+        @test η ≈ 0.260 rtol = 5e-3
+
+        # loss map: Gouy–Stodola between the reservoirs, W_Carnot − W = T_river Σ Ṡ_gen. Nearly all of
+        # it is the feed water delivered at T2 into the boiler at T3 (booked on the feed pump); the
+        # stiff heater and cooler add little
+        Sgen = entropy_production(cs, u)
+        @test Qin * (1 - T_c / T_b) - Wnet ≈ T_c * sum(values(Sgen)) rtol = 1e-6
+        @test Sgen[:feed] >= 0.99 * sum(values(Sgen))
+        @test abs(Sgen[:turbine]) <= 1e-9 * sum(values(Sgen))     # ideal: exhaust at the condenser's T, μ
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9
+    end
+end

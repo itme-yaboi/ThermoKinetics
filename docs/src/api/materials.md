@@ -19,6 +19,7 @@ IdealGasMixture
 IdealSolution
 Moving
 RealFluid
+quality
 molar_mass
 nucleons
 species_names

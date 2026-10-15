@@ -25,5 +25,6 @@ include("helpers.jl")
     include("test_reactions.jl")      # slice 7: 08 §H H1–H8, H10; mixtures, reactions, nuclear and heat sources
     include("test_rockets.jl")        # slice 8: moving bodies, momentum streams, nozzle, gravity on variable mass
     include("test_realfluid.jl")      # slice 10a: real fluids through Clapeyron (package extension)
+    include("test_twophase.jl")       # slice 10b: two-phase pure fluids, phase-selective draws
     include("test_applications.jl")   # DESIGN §0.1 application tests
 end

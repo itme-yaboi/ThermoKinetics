@@ -1,31 +1,33 @@
 # STATUS
 
-*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-15, after slice 10a.*
+*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-15, after slice 10b.*
 
 ## Where we are
 
 - **Repository:** the package is `ThermoKinetics` (D-38), on the private GitHub repository `itme-yaboi/ThermoKinetics` (`origin`). `docs/veinik/` and the Veinik section notes are local only and must never be committed (D-36, D-37).
 - **Phase:** build. DESIGN.md revision 2 is approved. Revision 3 is accepted and built: mechanics (DESIGN §18) and rockets (§19).
-- **Done:** slices 1–9, 7a and 10a. Slice 10a was the single-phase real-fluid backend (`RealFluid` through Clapeyron, a package extension; D-50, D-51 for review). Slice 9 was cycles E3 (Veinik's rectangular cycle) and E4 (Otto) (D-49). Slice 8 was rockets (D-33, D-47, D-48). Slice 7 was reactions, nuclear and heat sources (D-39 to D-44). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
+- **Done:** slices 1–9, 7a, 10a and 10b. Slice 10b was two-phase pure fluids (the (s, v) flash, wet isentropic states), phase-selective draws on streams and pumps, and the ideal Rankine cycle (D-52; deviations D-53, for review). Slice 10a was the single-phase real-fluid backend (`RealFluid` through Clapeyron, a package extension; D-50, D-51). Slice 9 was cycles E3 (Veinik's rectangular cycle) and E4 (Otto) (D-49). Slice 8 was rockets (D-33, D-47, D-48). Slice 7 was reactions, nuclear and heat sources (D-39 to D-44). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
 - **Future work noted (D-48):** a finite-rate or two-zone rocket chamber, so the combustion loss is booked on the reaction rather than the injectors; a check valve for pressure-fed feeds.
-- **Next:** slice 10b, two-phase pure fluids and Rankine (DESIGN §2.6, D-52, accepted); then the plotting track.
+- **Next:** the plotting track (DESIGN §17; refresh it for the element kinds of slices 6–10 first; it must use the Freivalds–Glagoļevs layout).
+- **Open for review:** D-53 items 1 (inversion before the flash) and 3 (the saturation warm-start rule).
 - **Future option noted (D-51):** a phase check for mixtures (compressed or subcooled systems).
 - **Real fluids:** `using ThermoKinetics, Clapeyron` loads the backend; helium `GERG2008(["helium"])`, CO₂ `SingleFluid("carbon dioxide")`, water `IAPWS95()`, air `GERG2008(["nitrogen", "oxygen", "argon"])`. Load it with `using ThermoKinetics; import Clapeyron` (no run-time cost) and write `Clapeyron.GERG2008(...)` etc.: Clapeyron also exports `pressure`, `temperature`, `internal_energy`, so `using` both makes those ambiguous. First compilation is slow (minutes).
-- **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
-- **Tests:** 208,839 checks pass in ~7.3 min (about half of it compiling the Clapeyron backend) (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
+- **Two-phase water and CO₂:** a pure `RealFluid` body inside the dome is a saturated mixture (forces T, −p_sat, μ_sat); `charges_at(fluid; p or T, x, m)` builds one and `quality(fluid, E)` reads it. `IdealPump(mdot; draw = :liquid)` takes saturated liquid from a two-phase body (a feed pump on a hotwell), `:vapor` saturated vapour; `:mixture` (default) the mean state, which models a failed trap. Mixtures stay single-phase.
+- **Later:** see DESIGN §15.
+- **Tests:** 209,522 checks pass in ~7.3 min (much of it compiling the Clapeyron backend) (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
 ## What exists
 
 | Area | In `src/` | Notes |
 |---|---|---|
 | Domains | `Thermal`, `Volumetric` (−p), `Species`, `Electrical` (φ), `Momentum` (one axis, w), `AngularMomentum` (ω), `FluxLinkage` (i), `Displacement` (x, F), `Angle` (θ, M) | traits and default force tolerances |
-| Materials | `ConstantCapacitySolid`, `IdealGas`, `ElasticVolume`, `LinearCapacitor`, `InertialMass`, `RotationalInertia`, `LinearInductor`, `LinearSpring`, `TorsionSpring`, `PendulumPotential`, `Composite`, `EntropicCharge` (P = B e T); `IdealGasMixture`, `IdealSolution` from `SpeciesData` | U(E) closed form; AD forces and Hessian; `stiffness_floor` for non-convex U; `inertial_mass`; mixtures: formation data, molar masses from atoms, constant c_v, trace floor (D-41); `Moving(material; m_dry)` (variable-mass bodies, D-33); `RealFluid(model; species)` (Clapeyron extension, single phase) |
+| Materials | `ConstantCapacitySolid`, `IdealGas`, `ElasticVolume`, `LinearCapacitor`, `InertialMass`, `RotationalInertia`, `LinearInductor`, `LinearSpring`, `TorsionSpring`, `PendulumPotential`, `Composite`, `EntropicCharge` (P = B e T); `IdealGasMixture`, `IdealSolution` from `SpeciesData` | U(E) closed form; AD forces and Hessian; `stiffness_floor` for non-convex U; `inertial_mass`; mixtures: formation data, molar masses from atoms, constant c_v, trace floor (D-41); `Moving(material; m_dry)` (variable-mass bodies, D-33); `RealFluid(model; species)` (Clapeyron extension; pure fluids two-phase in the dome, `quality`) |
 | Nodes | `Body`; `Reservoir` (constant or time-varying forces `domain => t -> P(t)`, or a material); `Junction` (zero capacity, algebraic forces) | |
 | Conductors | `ThermalConductance`; `LinearConductance` (`VolumeConductance`, `Resistor`, `MassConductance`), `QuadraticDrag`, `CoulombFriction`, with `InternalNode` / `Split` / `Into`; coupled `ThermoelectricConductance`, `KnudsenBarrier`, `OnsagerConductance` | basis maps from Veinik's data; monotone laws are D ≥ 0 by type |
 | Converters | `Converter(W, domains)` (antisymmetric W), `Gyrator`, `InductorBranch`, `SpringBranch`, `TorsionBranch`; `Transformer` (index-reduced DAE, Baumgarte τ: gears, rack and pinion) | power-exact; converted totals are not conserved (by design) |
 | Sources | `Source(domain => rate)` (force, torque, current; constant or t -> rate); `GravityField(g)` (−Mg; special-purpose, flagged, D-34); `HeatSource(Q̇)`; `NuclearSource(ν; rate = FirstOrder(λ or half_life) or t -> ξ̇, E_dep, external)` | charge received and external work ledgered (`source_ledger`); heat and nuclear sources: energy, entropy and species received (`boundary_ledger`); nucleons and charge checked at compile; dU = E_dep ξ̇ |
 | Reactions | `Reaction(ν...; law)` or `Reaction([ν₁, ν₂]; law)` with `AffinityLaw(L)` (scalar or PSD matrix) or `MassAction(k0; b, Ea, orders)` | inside one body, dU = 0, A·ξ̇ ≥ 0 exactly; element balance checked at compile; `reaction_rates`, `element_totals` |
-| Flow | `Stream`, `IdealPump`, `FlowBoundary`, `PassThroughOutlet`, `Nozzle` | single species for pumps and boundaries, which may feed a richer mixture; streams and pumps between `Moving` bodies carry momentum; `nozzle_state` |
+| Flow | `Stream`, `IdealPump`, `FlowBoundary`, `PassThroughOutlet`, `Nozzle` | multi-species ideal pumps for real-fluid mixtures; boundaries single species, which may feed a richer mixture; streams and pumps between `Moving` bodies carry momentum; `nozzle_state`; phase-selective `draw` on streams and pumps (D-52) |
 | Switching | `Switched(element; on = t -> Bool)` (also clutches and brakes) | discontinuities as `tstops`; evaluated as left limits |
 | Running | `simulate` (Rodas5P; mass-matrix DAE when junctions or transformers exist; `consistent_state`; inadmissible steps rejected, NaN on invalid trial stages; ledgers error-controlled by default with scaled tolerances, `atol_ledger` override); `steady_state` | tolerances: DESIGN §12.5 |
 | Results | as before, plus `algebraic_index`, `constraint_residual`, `source_ledger`, `reaction_rates`, `element_totals` | closure checks element totals when reactions act; per-species and per-element absolute drift (`closure(...).species`, `.elements`, D-43) |
@@ -43,6 +45,7 @@ Validation covered (`test/`):
   - E2 (η = 1 − T₂/T₁ at the internal temperatures, exactly; Gouy–Stodola).
 - **08 §G:** G1–G9.
 - **Real fluids (slice 10a):** forces, volume, entropy, energy vs. Clapeyron's (p, T) route for helium, CO₂ (incl. near-critical), water and air; homogeneity; Hessian symmetry and C_v; exact Jacobians; guards; isentropic states; datum rule; reference values.
+- **Two-phase (slice 10b):** dome states of water and CO₂ vs. Clapeyron's saturation properties (T, p_sat, μ, x, U); continuity at x → 0 and 1; single-phase states next to the dome; exact Jacobians and the tie-line null direction; the wet isentropic state (x = 0.8861 for Çengel 10-1); draws (entropy drawn, quality change, closure, default, errors, single-phase bodies).
 - **Rockets (slice 8):** Moving material, momentum streams and pumps, nozzle kernel identities at random states, Galilean invariance, test stand, gravity on variable mass, Çengel Example 17-7.
 - **08 §H:** H1–H10 (isomerization, equilibrium by Gibbs minimization and entropy maximization, adiabatic combustion, calorimeter, Onsager-coupled reactions, tritium decay, Bateman chain, heat source, irradiated water, approach to zero); mixture and reaction kernel identities; A1/A3 and A → 0 on random reacting networks.
   - **Translational:**
@@ -81,7 +84,9 @@ Validation covered (`test/`):
   - bipropellant static fire vs. an independent hand calculation (T_c, p_c, composition, c*, C_F, I_sp, loss map);
   - flight vs. Beer & Johnston Sample Problem 14.9 (velocity and altitude, with gravity);
   - the ideal Otto cycle vs. the cold-air standard (Çengel Example 9-3);
-  - real-fluid Brayton: air vs. Çengel Example 9-6, helium and sCO₂ loops vs. a hand calculation, with Gouy–Stodola loss maps; an ideal steam turbine vs. Çengel Example 7-5.
+  - real-fluid Brayton: air vs. Çengel Example 9-6, helium and sCO₂ loops vs. a hand calculation, with Gouy–Stodola loss maps; an ideal steam turbine vs. Çengel Example 7-5;
+  - superheated steam cooled in a rigid vessel into the dome (Çengel Example 3-6: T₁, final p_sat and quality, heat removed);
+  - the simple ideal Rankine cycle (Çengel Example 10-1: h₁, w_pump, h₃, s₃, x₄, h₄, w_net, η; a hand calculation at rtol 1e-6; Gouy–Stodola, with the feed-water heating as nearly all of the loss).
 
 ## Known shortcuts and open items
 
@@ -101,9 +106,9 @@ Validation covered (`test/`):
   - vector momentum;
   - steady state for isolated groups;
   - turbulent flow driver;
-  - multi-species pumps and boundaries;
+  - multi-species flow boundaries;
   - inertance-driven flows;
-  - two-phase states and the flash (slice 10b), CoolProp;
+  - the mixture (multi-component) flash, metastable and non-equilibrium phase change, CoolProp;
   - α(T) thermoelectrics;
   - contact potentials;
   - the membrane application test;
