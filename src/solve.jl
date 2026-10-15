@@ -63,8 +63,9 @@ function abstol_vector(cs::CompiledSystem; atol_scale::Real = 1.0, atol_ledger =
         E = cs.u0[off:off+N-1]
         A = eos_matrix(b.material, E)
         F = forces(b.material, E)
+        fl = stiffness_floor(b.material)
         for (k, d) in enumerate(domains(b.material))
-            t = atol_scale * default_force_atol(d) / abs(A[k, k])
+            t = atol_scale * default_force_atol(d) / max(abs(A[k, k]), fl[k])
             tol[off+k-1] = (isfinite(t) && t > 0) ? t : 1e-12 * max(abs(E[k]), 1.0)
             push!(get!(by_domain, d, Float64[]), tol[off+k-1])
             d isa Thermal && push!(temperatures, F[k])
@@ -276,8 +277,9 @@ function _charge_scales(cs::CompiledSystem, u::AbstractVector)
         E = SVector{N}(u[off:off+N-1])
         A = eos_matrix(b.material, E)
         F = forces(b.material, E)
+        fl = stiffness_floor(b.material)
         for k in 1:N
-            v = max(abs(F[k]), 1.0) / abs(A[k, k])
+            v = max(abs(F[k]), 1.0) / max(abs(A[k, k]), fl[k])
             s[off+k-1] = (isfinite(v) && v > 0) ? v : 1.0
         end
     end
@@ -496,8 +498,21 @@ end
 generated_entropy(cs::CompiledSystem, u::AbstractVector) =
     Dict(n => _ledger_total(u, r) for (n, r) in cs.prod_led)
 
-"External work [W, or J if integrated] supplied by every pump and flow boundary, read from `v`."
+"External work [W, or J if integrated] supplied by every pump, flow boundary and source, read from `v`."
 pump_work(cs::CompiledSystem, v::AbstractVector) = Dict(n => v[i] for (n, i) in cs.work_led)
+
+"""
+    source_ledger(cs, v, source) -> (; charge, W)
+
+What a `Source` or `GravityField` has received from the model (`charge`; negative when it
+supplies charge) and the external work `W` it has supplied, read from the ledger block of `v`.
+These are integrated values from a state and rates from a rate vector. For gravity, W = −ΔPE.
+"""
+function source_ledger(cs::CompiledSystem, v::AbstractVector, name::Symbol)
+    c = _unwrap(_element(cs, name))
+    c isa CompiledSource || throw(ArgumentError(":$name is not a source"))
+    return (; charge = v[c.led], W = v[c.led+1])
+end
 
 """
     boundary_ledger(cs, v, element) -> (; m, S, U, W)

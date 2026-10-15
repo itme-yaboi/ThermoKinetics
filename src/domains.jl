@@ -46,6 +46,15 @@ i [A]. An inductor stores it, and an inductor branch converts it to charge (a 3-
 """
 struct FluxLinkage <: FormOfMotion end
 
+"""
+Elastic translation: charge displacement x [m], force F [N] (Veinik (5), (12): X dx). A spring
+stores it; a spring branch (a 3-port converter) joins it to the momenta of the two ends.
+"""
+struct Displacement <: FormOfMotion end
+
+"Elastic rotation: charge angle θ [rad], force torque M [N m] (Veinik (6), (13): M dφ)."
+struct Angle <: FormOfMotion end
+
 charge_symbol(::Thermal) = :S
 charge_unit(::Thermal) = "J/K"
 force_symbol(::Thermal) = :T
@@ -81,6 +90,16 @@ charge_unit(::FluxLinkage) = "Wb"
 force_symbol(::FluxLinkage) = :i
 force_unit(::FluxLinkage) = "A"
 
+charge_symbol(::Displacement) = :x
+charge_unit(::Displacement) = "m"
+force_symbol(::Displacement) = :F
+force_unit(::Displacement) = "N"
+
+charge_symbol(::Angle) = :θ
+charge_unit(::Angle) = "rad"
+force_symbol(::Angle) = :M
+force_unit(::Angle) = "N m"
+
 "Number of state slots the charge occupies (vector charges such as momentum take more)."
 ncomponents(::FormOfMotion) = 1
 
@@ -99,3 +118,5 @@ default_force_atol(::Electrical) = 1e-8   # V
 default_force_atol(::Momentum) = 1e-9     # m/s
 default_force_atol(::AngularMomentum) = 1e-8   # rad/s
 default_force_atol(::FluxLinkage) = 1e-9  # A
+default_force_atol(::Displacement) = 1e-8  # N
+default_force_atol(::Angle) = 1e-8         # N m

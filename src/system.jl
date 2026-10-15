@@ -114,6 +114,17 @@ function connect!(sys::ThermoSystem, el::Union{FlowBoundary,PassThroughOutlet}, 
 end
 
 """
+    connect!(sys, source, body; name) -> Symbol
+
+Attach a `Source` or a `GravityField` to a body.
+"""
+function connect!(sys::ThermoSystem, el::Union{Source,GravityField}, node::Symbol;
+                  name::Symbol = _default_name(sys, el))
+    _check_node(sys, node)
+    return _add_element!(sys, el, name, node => :a)
+end
+
+"""
     connect!(sys, converter, nodes...; name) -> Symbol
 
 Join a `Converter`'s ports, in order, to distinct nodes (port k is role `:p<k>`).

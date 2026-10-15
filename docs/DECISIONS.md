@@ -442,7 +442,7 @@ Each item lists what was built instead of the design text, and why.
   - a flat ledger tolerance: simple, but wastes steps while ledgers are near zero.
 - **Why:** loss attribution is a consulting deliverable (CLAUDE.md). Correctness should be the default, and the measured overhead is small except where it buys accuracy.
 
-### D-32 Mechanical and rotational systems: elastic forms of motion, spring branches, sources, gravity, monotone friction — proposed (2026-10-15; DESIGN §18, slice 7)
+### D-32 Mechanical and rotational systems: elastic forms of motion, spring branches, sources, gravity, monotone friction — accepted (user, 2026-10-15, with D-34; DESIGN §18; built in slice 6, D-35)
 - **Asked for by the user:** basic mechanical systems (mass–spring–damper, pendulum) and rotational systems (gear trains, rotational dynamics) as intended uses (DESIGN §0.1).
 - **Chosen:**
   - **Domains:** `Displacement` (x, F) and `Angle` (θ, M), from Veinik (5), (6), (12), (13).
@@ -461,11 +461,11 @@ Each item lists what was built instead of the design text, and why.
   - (e) Coulomb friction with true sticking (switched or complementarity). Later.
   - (f) Euler's 3-D rigid-body equations. Needs vector angular momentum and a state-dependent antisymmetric operator inside one body, a new element kind (DESIGN §18.7). Not proposed.
 - **Why:** each piece is a new (E, P) pair, a material, a converter with constant antisymmetric W, a conductance type that is sign-safe by type, or a ledgered source. The assembler, the kernels and the solver are unchanged. That is the architecture's own test (DESIGN §0.1).
-- **To review:** the domain names; `GravityField` as a source rather than (b); whether slice 7 goes before slice 6 (it is independent).
+- **To review:** the domain names; `GravityField` as a source rather than (b); whether mechanics goes before reactions (it is independent). *(Answered in D-34: the source, flagged; mechanics first, as slice 6.)*
 
 ### D-33 Rockets: feasible with moving variable-mass bodies, momentum-carrying streams and an ideal nozzle — proposed (2026-10-15; DESIGN §19, slice 8)
 - **Asked for by the user:** the rocket equation with a simplified engine (combustion, then expansion through a nozzle), with confirmation of whether the framework allows it.
-- **Finding:** it does, after slice 6 (reactions, plus an ideal-gas mixture with formation enthalpies) and slice 7 (gravity, drag). No new solver and no new `Transfer` kind.
+- **Finding:** it does, after the reactions slice (now slice 7: reactions, plus an ideal-gas mixture with formation enthalpies) and the mechanics slice (now slice 6: gravity, drag). No new solver and no new `Transfer` kind.
 - **Chosen:**
   - **`Moving(material; m_dry)`:** U = U_int + p²/(2M), with M from the body's own mass charges. This gives μ_k = μ_k,int − w²/2.
   - **Rigid links:** every body on the vehicle is `Moving`, held at one velocity by `Transformer(1)` on `Momentum` (index 2, D-29).
@@ -486,7 +486,41 @@ Each item lists what was built instead of the design text, and why.
   - a frozen nozzle, and an equilibrium chamber rather than combustion kinetics;
   - gaseous propellants until the real-fluid backend;
   - one axis.
-- **To review:** whether slice 6 should support a sign-preserving nonlinear (mass-action) rate law as well as the linear affinity law. A rocket chamber does not need it; ignition and kinetics-limited combustion do.
+- **To review:** whether slice 6 should support a sign-preserving nonlinear (mass-action) rate law as well as the linear affinity law. A rocket chamber does not need it; ignition and kinetics-limited combustion do. *(Answered in D-34: yes, in the reactions slice, if it fits.)*
+
+### D-34 Review of revision 3: gravity as a source, special-purpose elements over rule changes, slice order — accepted (user, 2026-10-15)
+- **Working principle (user):** do not sacrifice generality for a specific case. A few explicit, ledgered, special-purpose ("virtual", one-off) components that enable a specific case are preferred to changing the framework's rules to accommodate it. This is recorded in CLAUDE.md "How to work".
+- **Gravity: `GravityField(g)`, a momentum source** (D-32 as proposed). This decision is **flagged: it may need to change**.
+  - **Evaluated against the alternative,** height h as a charge with U ∋ Mgh (Veinik (11)).
+    - The source fits the current framework more closely. It is an explicit external source with ledgered work, an element kind non-negotiable 1 already provides, and it needs no rule change.
+    - Height as a charge is physically the same as dQ = F dx. But for a body of variable mass it must sit in the same body as the mass (M is that body's charge), and dh/dt = w then needs a converter with both ports on one node. That changes a framework rule (D-29 §3), and it puts a conversion inside a body whose p–h part is uncoupled in U, against the accumulator principle (DESIGN §2.2, Veinik §11).
+    - For a constant mass, height-as-charge works today without any rule change: a separate weight body U = mgh joined by a converter. `PendulumPotential` is that pattern.
+  - **Revisit when:**
+    - hydrostatic or elevation heads matter in flow networks (balance-of-plant loops), where μ + gz is needed in streams;
+    - a model needs altitude-dependent gravity;
+    - the vehicle's height must be a state rather than a derived ledger.
+    - Then weigh relaxing the converter rule (ports on one node with distinct domains; W stays antisymmetric) against a dedicated height element.
+- **Mass-action rate law:** the reactions slice includes a sign-preserving nonlinear (mass-action) rate law alongside the linear affinity law, if it fits the element contract (A·J ≥ 0 by type). If it raises a problem, it goes to future work, with the reason recorded.
+- **Slice order:** mechanics (DESIGN §18) is built first, as slice 6, and merged after the user's approval before the reactions work starts. Reactions and nuclear sources become slice 7, rockets slice 8.
+- **`docs/veinik/08_validation_cases.md`:** the user approved adding the mechanical validation cases there (new §G). The changed lines are reported with the slice.
+
+### D-35 Slice 6 implementation: deviations from DESIGN §18 — accepted (slice 6, 2026-10-15)
+1. **`stiffness_floor(mat)`** is the tolerance hook DESIGN §18.2 asked for.
+   - Per charge, default 0; `PendulumPotential` uses mgℓ; a `Composite` concatenates its parts' floors.
+   - `abstol_vector` and the steady-state row scaling (`_charge_scales`) use max(|A_kk|, floor).
+   - Test: at θ₀ = π/2, where A ≈ 0, the angle's tolerance is 1e-8/(mgℓ).
+2. **`inertial_mass(mat)`** is what `GravityField` reads: `InertialMass` m, or the sum over a `Composite`'s parts; `nothing` otherwise, which is a compile error. The rate is constant (−Mg) because every mass so far is a parameter. `Moving` (slice 8) will make it state-dependent.
+3. **`GravityField` ledgers its work only.** The displacement ledger ∫ w dt is deferred to slice 8. For a constant mass the height change is −W/(Mg).
+4. **`Source` is non-thermal only**, and acts on bodies only.
+   - A thermal (heat) source is a separate element, not built yet; `Source(Thermal() => …)` is refused with that message.
+   - Its ledgers are the charge received (negative: it supplies) and the external work supplied. The work sits with the pump work (`pump_work` lists it), and `source_ledger` reads both.
+   - A source anchors its charge and energy for `steady_state`, like a boundary.
+5. **`QuadraticDrag(c; domain)`, `CoulombFriction(F_c; w_ε, domain)`:** the domain defaults to `Momentum`. Coulomb friction is tanh-regularized, with no true sticking.
+6. **Unchanged framework rules:** converter ports stay on distinct nodes. Gears, rack and pinion, clutches and brakes use the existing `Transformer` and `Switched`. No lossy transformer (load-dependent mesh efficiency) is built.
+7. **Test layout:**
+   - 08 §G G1, G2, G5 (translational) and G6–G8 (rotational) are application tests in `test_applications.jl`.
+   - G3, G4, G9, construction and validation, the kernel identities, the source ledgers, a random mechanical-chain A1/A3 test, the pendulum stiffness floor, rack and pinion, and a DC motor with a gearbox are in `test_mechanics.jl`.
+8. **`docs/veinik/08_validation_cases.md`** (user-approved, D-34): lines 60–75 were added, a blank line, then §G with the G1–G9 table. No existing line changed.
 
 ---
 

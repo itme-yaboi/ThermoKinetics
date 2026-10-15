@@ -295,3 +295,155 @@ end
         @test Pload / Qh < 1 - Tc / Th                                         # below Carnot
     end
 end
+
+@testset "applications: translational mechanics" begin
+    @testset "G1 free mass–spring–damper: response, and all the energy ends up as heat" begin
+        m, k, x0, T = 1.0, 100.0, 0.01, 300.0
+        ωn = sqrt(k / m)
+        # undamped: x0 cos ωn t, mechanical energy conserved
+        cs0 = compile(msd_system(; m, k, c = 0.0, x0))
+        sol0 = simulate(cs0, (0.0, 3 * 2π / ωn); saveat = 0.02, reltol = 1e-11)
+        for (t, u) in zip(sol0.t, sol0.u)
+            @test charges(cs0, u, :spring)[1] ≈ x0 * cos(ωn * t) atol = 1e-7 * x0
+        end
+        E0 = total_energy(cs0, sol0.u[1])
+        @test maximum(abs(total_energy(cs0, u) - E0) for u in sol0.u) <= 1e-8 * E0
+        # under-, critically and over-damped
+        for ζ in (0.1, 1.0, 2.0)
+            c = 2ζ * sqrt(k * m)
+            σ = ζ <= 1 ? ζ * ωn : ωn * (ζ - sqrt(ζ^2 - 1))          # slowest decay rate
+            cs = compile(msd_system(; m, k, c, x0, T))
+            sol = simulate(cs, (0.0, 40 / σ); saveat = vcat(range(0, 8 / σ; length = 60), 40 / σ), reltol = 1e-10)
+            for (t, u) in zip(sol.t, sol.u)
+                @test charges(cs, u, :spring)[1] ≈ msd_x(t; ζ, ωn, x0) atol = 1e-6 * x0
+            end
+            uf = sol.u[end]
+            Q = reservoir_ledger(cs, uf, :env).U
+            @test Q ≈ 0.5k * x0^2 rtol = 1e-6                          # for any c (the mechanical D1)
+            @test generated_entropy(cs, uf)[:damper] ≈ Q / T rtol = 1e-6
+            cl = closure(cs, sol)
+            @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10
+        end
+    end
+
+    @testset "G2 forced oscillator: amplitude, phase, and power balance" begin
+        m, k, ζ, F0, Ω, T = 1.0, 100.0, 0.1, 1.0, 8.0, 300.0
+        c = 2ζ * sqrt(k * m)
+        cs = compile(msd_system(; m, k, c, x0 = 0.0, T, F = t -> F0 * sin(Ω * t)))
+        Tp = 2π / Ω
+        t0 = ceil(40 / (ζ * sqrt(k / m)) / Tp) * Tp                   # transients have decayed by e⁻⁴⁰
+        N = 5
+        ts = collect(range(t0, t0 + N * Tp; length = 8N + 1))
+        sol = simulate(cs, (0.0, ts[end]); saveat = ts, reltol = 1e-10)
+        X = F0 / hypot(k - m * Ω^2, c * Ω)
+        φ = atan(c * Ω, k - m * Ω^2)
+        for (t, u) in zip(sol.t, sol.u)
+            @test charges(cs, u, :spring)[1] ≈ X * sin(Ω * t - φ) atol = 1e-6 * X
+        end
+        Win = source_ledger(cs, sol.u[end], :force).W - source_ledger(cs, sol.u[1], :force).W
+        Q = reservoir_ledger(cs, sol.u[end], :env).U - reservoir_ledger(cs, sol.u[1], :env).U
+        @test Win ≈ 0.5c * Ω^2 * X^2 * N * Tp rtol = 1e-6               # mean input power = mean dissipation
+        @test Q ≈ Win rtol = 1e-6
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10
+    end
+
+    @testset "G5 pendulum: period vs the elliptic integral, small to large amplitude; damped heat" begin
+        m, ℓ, g = 1.0, 1.0, 9.81
+        T0 = 2π * sqrt(ℓ / g)
+        for θ0 in (0.01, 1.0, 2.5)
+            Tp = 4 * sqrt(ℓ / g) * ellipK(sin(θ0 / 2))
+            θ0 == 0.01 && @test Tp ≈ T0 * (1 + θ0^2 / 16) rtol = 1e-9     # the small-amplitude limit
+            cs = compile(pendulum_system(; m, ℓ, g, θ0))
+            sol = simulate(cs, (0.0, Tp); saveat = [Tp / 4, Tp / 2, Tp], reltol = 1e-11)
+            θ = [charges(cs, u, :pot)[1] for u in sol.u]
+            @test abs(θ[1]) <= 1e-7 * θ0
+            @test θ[2] ≈ -θ0 atol = 1e-7 * θ0
+            @test θ[3] ≈ θ0 atol = 1e-7 * θ0
+            @test abs(force(cs, sol.u[3], :rod, AngularMomentum())) <= 1e-7 * θ0 * sqrt(g / ℓ)
+            E0 = m * g * ℓ * (1 - cos(θ0))
+            @test maximum(abs(total_energy(cs, u) - E0) for u in sol.u) <= 1e-8 * E0
+        end
+        θ0, b, T = 1.0, 0.5, 300.0
+        cs = compile(pendulum_system(; m, ℓ, g, θ0, b, T))
+        sol = simulate(cs, (0.0, 160.0); reltol = 1e-10)
+        Q = reservoir_ledger(cs, sol.u[end], :env).U
+        @test Q ≈ m * g * ℓ * (1 - cos(θ0)) rtol = 1e-6
+        @test generated_entropy(cs, sol.u[end])[:pivot] ≈ Q / T rtol = 1e-6
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10
+    end
+end
+
+@testset "applications: rotational mechanics" begin
+    @testset "G6 gear train: spin-up sees the reflected inertia J₁ + J₂/r₁² + J₃/(r₁r₂)²" begin
+        J1, J2, J3, r1, r2, τ = 0.01, 0.05, 0.2, 3.0, 2.0, 0.5
+        sys = ThermoSystem()
+        s1 = add!(sys, Body(:s1, RotationalInertia(J1); ω = 0.0))
+        s2 = add!(sys, Body(:s2, RotationalInertia(J2); ω = 0.0))
+        s3 = add!(sys, Body(:s3, RotationalInertia(J3); ω = 0.0))
+        g1 = connect!(sys, Transformer(r1; a = AngularMomentum(), b = AngularMomentum()), s1, s2)   # ω₁ = r₁ω₂
+        g2 = connect!(sys, Transformer(r2; a = AngularMomentum(), b = AngularMomentum()), s2, s3)
+        connect!(sys, Source(AngularMomentum() => τ), s1; name = :motor)
+        cs = compile(sys)
+        Jeq = J1 + J2 / r1^2 + J3 / (r1 * r2)^2
+        sol = simulate(cs, (0.0, 2.0); saveat = 0.25)
+        for (t, u) in zip(sol.t, sol.u)
+            ω1 = force(cs, u, s1, AngularMomentum())
+            @test ω1 ≈ τ * t / Jeq rtol = 1e-7 atol = 1e-12
+            @test force(cs, u, s2, AngularMomentum()) ≈ ω1 / r1 rtol = 1e-7 atol = 1e-12
+            @test force(cs, u, s3, AngularMomentum()) ≈ ω1 / (r1 * r2) rtol = 1e-7 atol = 1e-12
+            @test abs(constraint_residual(cs, u, g1)) <= 1e-8 && abs(constraint_residual(cs, u, g2)) <= 1e-8
+        end
+        uf = sol.u[end]
+        @test source_ledger(cs, uf, :motor).W ≈ total_energy(cs, uf) rtol = 1e-6       # work in = kinetic energy
+        @test total_energy(cs, uf) ≈ 0.5 * Jeq * (τ * 2.0 / Jeq)^2 rtol = 1e-6
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6
+    end
+
+    @testset "G7 two inertias on a torsion shaft: ω_n = √(k(J₁+J₂)/(J₁J₂))" begin
+        J1, J2, k, ω0 = 0.1, 0.3, 50.0, 10.0
+        sys = ThermoSystem()
+        r1 = add!(sys, Body(:r1, RotationalInertia(J1); ω = ω0))
+        r2 = add!(sys, Body(:r2, RotationalInertia(J2); ω = 0.0))
+        shaft = add!(sys, Body(:shaft, TorsionSpring(k); θ = 0.0))
+        connect!(sys, TorsionBranch(), r1, r2, shaft)              # dθ = ω₂ − ω₁
+        cs = compile(sys)
+        ωn = sqrt(k * (J1 + J2) / (J1 * J2))
+        sol = simulate(cs, (0.0, 3 * 2π / ωn); saveat = 2π / ωn / 16, reltol = 1e-11)
+        for (t, u) in zip(sol.t, sol.u)
+            @test charges(cs, u, shaft)[1] ≈ -(ω0 / ωn) * sin(ωn * t) atol = 1e-7 * ω0 / ωn
+            L = charges(cs, u, r1)[1] + charges(cs, u, r2)[1]
+            @test L ≈ J1 * ω0 rtol = 1e-12                          # angular momentum is conserved
+        end
+        E0 = total_energy(cs, sol.u[1])
+        @test maximum(abs(total_energy(cs, u) - E0) for u in sol.u) <= 1e-8 * E0
+    end
+
+    @testset "G8 clutch engagement: the loss ½J₁J₂Δω²/(J₁+J₂) for any clutch conductance" begin
+        J1, J2, ω1, ω2, t1, T = 0.2, 0.5, 100.0, 20.0, 1.0, 300.0
+        Jr = J1 * J2 / (J1 + J2)
+        for G in (0.05, 5.0)
+            sys = ThermoSystem()
+            a = add!(sys, Body(:a, RotationalInertia(J1); ω = ω1))
+            b = add!(sys, Body(:b, RotationalInertia(J2); ω = ω2))
+            env = add!(sys, Reservoir(:env; T))
+            cl_ = connect!(sys, Switched(Conductor(LinearConductance(AngularMomentum(), G); dissipation = Into(env));
+                                         on = t -> t >= t1), a, b; name = :clutch)
+            cs = compile(sys)
+            tend = t1 + 40 * Jr / G
+            sol = simulate(cs, (0.0, tend); saveat = [t1, tend], tstops = [t1])
+            @test force(cs, sol.u[1], a, AngularMomentum()) == ω1                 # open until t₁
+            ωf = (J1 * ω1 + J2 * ω2) / (J1 + J2)
+            uf = sol.u[end]
+            @test force(cs, uf, a, AngularMomentum()) ≈ ωf rtol = 1e-8
+            @test force(cs, uf, b, AngularMomentum()) ≈ ωf rtol = 1e-8
+            Q = reservoir_ledger(cs, uf, env).U
+            @test Q ≈ 0.5Jr * (ω1 - ω2)^2 rtol = 1e-7
+            @test generated_entropy(cs, uf)[cl_] ≈ Q / T rtol = 1e-7
+            cl = closure(cs, sol)
+            @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10 && cl.charge_rel <= 1e-10
+        end
+    end
+end

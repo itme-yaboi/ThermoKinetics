@@ -128,6 +128,7 @@ internal_energy(s::ConstantCapacitySolid, E) = s.m * s.c * s.T_ref * exp(E[1] / 
 
 Charges of a body made of `mat` at a given state. Solids: `T`. Ideal gas: `T` and two of
 `m`, `p`, `V`. Elastic volume: `V` or `p`. Capacitor: `φ` or `q`. Mass: `w` or `p`. Rotor: `ω` or `L`. Inductor: `i` or `Λ`.
+Spring: `x` or `F`. Torsion spring: `θ` or `M`. Pendulum potential: `θ`.
 """
 function charges_at(s::ConstantCapacitySolid; T::Real)
     _check_positive(T, "temperature")
@@ -302,6 +303,95 @@ function charges_at(b::LinearInductor; i = nothing, Λ = nothing)
     return SVector(Float64(Λ === nothing ? b.L * i : Λ))
 end
 
+# --- elastic stores (uncoupled, one DOF) ---------------------------------------------------------
+
+"""
+    LinearSpring(k; x0 = 0)
+
+A linear spring, stiffness k > 0 [N/m]: one form of motion (displacement), U(x) = ½k(x − x0)²,
+so its force is the tension F = k(x − x0). A pure accumulator; join it to two moving nodes with
+a `SpringBranch` (its x is then the extension x_b − x_a).
+"""
+struct LinearSpring <: Material
+    k::Float64
+    x0::Float64
+    function LinearSpring(k::Real; x0::Real = 0.0)
+        _check_positive(k, "spring stiffness")
+        isfinite(x0) || throw(ArgumentError("x0 must be finite"))
+        return new(k, x0)
+    end
+end
+domains(::LinearSpring) = (Displacement(),)
+internal_energy(s::LinearSpring, E) = s.k * (E[1] - s.x0)^2 / 2
+function charges_at(s::LinearSpring; x = nothing, F = nothing)
+    (x === nothing) == (F === nothing) && throw(ArgumentError("give exactly one of x or F"))
+    return SVector(Float64(x === nothing ? s.x0 + F / s.k : x))
+end
+
+"""
+    TorsionSpring(k; θ0 = 0)
+
+A torsion spring or compliant shaft, stiffness k > 0 [N m/rad]: U(θ) = ½k(θ − θ0)², torque
+M = k(θ − θ0). Join it to two rotors with a `TorsionBranch`.
+"""
+struct TorsionSpring <: Material
+    k::Float64
+    θ0::Float64
+    function TorsionSpring(k::Real; θ0::Real = 0.0)
+        _check_positive(k, "torsional stiffness")
+        isfinite(θ0) || throw(ArgumentError("θ0 must be finite"))
+        return new(k, θ0)
+    end
+end
+domains(::TorsionSpring) = (Angle(),)
+internal_energy(s::TorsionSpring, E) = s.k * (E[1] - s.θ0)^2 / 2
+function charges_at(s::TorsionSpring; θ = nothing, M = nothing)
+    (θ === nothing) == (M === nothing) && throw(ArgumentError("give exactly one of θ or M"))
+    return SVector(Float64(θ === nothing ? s.θ0 + M / s.k : θ))
+end
+
+"""
+    PendulumPotential(m, g, ℓ)
+
+The gravitational potential of a pendulum of mass m [kg] and length ℓ [m] in a field g [m/s²],
+reduced to its one coordinate, the angle θ from the bottom: U(θ) = mgℓ(1 − cos θ), torque
+M = mgℓ sin θ. Join it to the rod's `RotationalInertia(m ℓ²)` with
+`Gyrator(-1; a = AngularMomentum(), b = Angle())` (dL/dt = −M, dθ/dt = ω). Not convex for
+|θ| ≥ π/2 (an inverted pendulum is unstable), so its tolerance scale is mgℓ (`stiffness_floor`).
+"""
+struct PendulumPotential <: Material
+    m::Float64
+    g::Float64
+    ℓ::Float64
+    function PendulumPotential(m::Real, g::Real, ℓ::Real)
+        _check_positive(m, "mass"); _check_positive(g, "gravity g"); _check_positive(ℓ, "length")
+        return new(m, g, ℓ)
+    end
+end
+domains(::PendulumPotential) = (Angle(),)
+internal_energy(p::PendulumPotential, E) = p.m * p.g * p.ℓ * (1 - cos(E[1]))
+charges_at(::PendulumPotential; θ::Real) = SVector(Float64(θ))
+
+"""
+    stiffness_floor(mat) -> Tuple
+
+Per charge, a lower bound on |∂²U/∂E_k²| used where a charge is converted to its force
+equivalent for tolerances and residual scaling (1/A_kk, D-20). Zero (no floor) by default. A
+material whose U is not convex everywhere supplies its natural scale, so a state where
+A_kk → 0 does not give an unbounded tolerance.
+"""
+stiffness_floor(mat::Material) = ntuple(_ -> 0.0, ncharges(mat))
+stiffness_floor(p::PendulumPotential) = (p.m * p.g * p.ℓ,)
+
+"""
+    inertial_mass(mat) -> Real or nothing
+
+The inertial mass of a body that carries momentum (what a `GravityField` acts on); `nothing`
+for a material without one.
+"""
+inertial_mass(::Material) = nothing
+inertial_mass(b::InertialMass) = b.m
+
 # --- composite (coupling groups) -------------------------------------------------------------
 
 """
@@ -343,6 +433,13 @@ function _valid_parts(parts::Tuple, E, off)
     p = first(parts)
     n = ncharges(p)
     return valid_state(p, _part_slice(E, off, n)) && _valid_parts(Base.tail(parts), E, off + n)
+end
+
+stiffness_floor(c::Composite) = Tuple(f for p in c.parts for f in stiffness_floor(p))
+
+function inertial_mass(c::Composite)
+    ms = [m for m in map(inertial_mass, c.parts) if m !== nothing]
+    return isempty(ms) ? nothing : sum(ms)
 end
 
 """

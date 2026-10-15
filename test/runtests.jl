@@ -19,5 +19,6 @@ include("helpers.jl")
     include("test_coupled.jl")        # slice 4: C4, C5, C6, coupled kernel, Onsager–Casimir
     include("test_kinetic.jl")        # slice 5: kinetic DOFs, converters, junctions, transformers, switching
     include("test_cycles.jl")         # slice 5: 08 §E Carnot cycles (E1, E2)
+    include("test_mechanics.jl")      # slice 6: 08 §G G3, G4, G9; springs, friction laws, sources, gears
     include("test_applications.jl")   # DESIGN §0.1 application tests
 end

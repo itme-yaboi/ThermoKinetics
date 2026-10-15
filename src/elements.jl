@@ -196,6 +196,50 @@ equilibrium μ is equal across the barrier, while p and concentration need not b
 """
 MassConductance(species::Symbol, L::Real) = LinearConductance(Species(species), L)
 
+# --- monotone single-row laws (DESIGN §5.2, §18.4) ---------------------------------------------
+#
+# J = f(ΔP) with f odd and nondecreasing, so D = ΔP f(ΔP) ≥ 0 by type, sign-exact in floating
+# point. D does not depend on the internal node's temperature, so kernel B applies unchanged.
+
+"""
+    QuadraticDrag(c; domain = Momentum())
+
+Quadratic (aerodynamic or turbulent) drag, c ≥ 0: J = c |ΔP| ΔP, e.g. a drag force
+c|Δw|Δw with c = ½ρC_dA [kg/m] on `Momentum`. D = c|ΔP|ΔP² ≥ 0.
+"""
+struct QuadraticDrag{D<:FormOfMotion} <: ConductorLaw
+    domain::D
+    c::Float64
+    function QuadraticDrag(c::Real; domain::FormOfMotion = Momentum())
+        domain isa Thermal && throw(ArgumentError("drag acts on a non-thermal form of motion"))
+        (c >= 0 && isfinite(c)) || throw(ArgumentError("drag coefficient must be ≥ 0 and finite, got $c"))
+        return new{typeof(domain)}(domain, c)
+    end
+end
+nonthermal_domains(law::QuadraticDrag) = (law.domain,)
+fluxes(law::QuadraticDrag, ΔP) = SVector(law.c * abs(ΔP[1]) * ΔP[1])
+
+"""
+    CoulombFriction(F_c; w_ε, domain = Momentum())
+
+Dry (Coulomb) friction of magnitude F_c ≥ 0, regularized over a slip speed w_ε > 0:
+J = F_c tanh(ΔP/w_ε). It approaches F_c sign(Δw) for |Δw| ≫ w_ε. True sticking (static friction
+above F_c) is not modeled. D = F_c ΔP tanh(ΔP/w_ε) ≥ 0.
+"""
+struct CoulombFriction{D<:FormOfMotion} <: ConductorLaw
+    domain::D
+    F_c::Float64
+    w_ε::Float64
+    function CoulombFriction(F_c::Real; w_ε::Real, domain::FormOfMotion = Momentum())
+        domain isa Thermal && throw(ArgumentError("friction acts on a non-thermal form of motion"))
+        (F_c >= 0 && isfinite(F_c)) || throw(ArgumentError("friction force must be ≥ 0 and finite, got $F_c"))
+        _check_positive(w_ε, "regularization speed w_ε")
+        return new{typeof(domain)}(domain, F_c, w_ε)
+    end
+end
+nonthermal_domains(law::CoulombFriction) = (law.domain,)
+fluxes(law::CoulombFriction, ΔP) = SVector(law.F_c * tanh(ΔP[1] / law.w_ε))
+
 # --- coupled laws (a thermal row plus non-thermal rows; kernel A, 07 §3.1) -------------------
 #
 # The forces are x = (X_Q, Y_1…Y_N) with X_Q = 1/T_b − 1/T_a and Y_k = ΔP_k c,
@@ -633,6 +677,24 @@ nodes a and b: dq_a = −i, dq_b = +i, dΛ = φ_a − φ_b. Connect it as
 InductorBranch() = Converter([0.0 0.0 -1.0; 0.0 0.0 1.0; 1.0 -1.0 0.0], (Electrical(), Electrical(), FluxLinkage()))
 
 """
+    SpringBranch()
+
+The 3-port converter that puts a spring body (displacement x, force F) between two moving
+nodes a and b: dp_a = +F, dp_b = −F, dx = w_b − w_a, so x is the extension x_b − x_a and a
+tension pulls the ends together. It is the mechanical twin of `InductorBranch`. Connect it as
+`connect!(sys, SpringBranch(), a, b, spring)`; a fixed end is a `Momentum` reservoir at w = 0.
+"""
+SpringBranch() = Converter([0.0 0.0 1.0; 0.0 0.0 -1.0; -1.0 1.0 0.0], (Momentum(), Momentum(), Displacement()))
+
+"""
+    TorsionBranch()
+
+`SpringBranch` for rotation: a torsion spring (angle θ, torque M) between two rotors a and b,
+dL_a = +M, dL_b = −M, dθ = ω_b − ω_a. `connect!(sys, TorsionBranch(), a, b, shaft)`.
+"""
+TorsionBranch() = Converter([0.0 0.0 1.0; 0.0 0.0 -1.0; -1.0 1.0 0.0], (AngularMomentum(), AngularMomentum(), Angle()))
+
+"""
     Transformer(r; a, b, τ = 1e-4)
 
 Ideal transformer between ports a and b: forces P_a = r P_b, flows F_a = λ and F_b = −r λ, so
@@ -652,6 +714,48 @@ struct Transformer
         (a isa Thermal || b isa Thermal) && throw(ArgumentError("thermal charge (entropy) is never converted"))
         _check_positive(τ, "stabilization time τ")
         return new(Float64(r), a, b, Float64(τ))
+    end
+end
+
+# --- external sources (DESIGN §8, §18.6) ---------------------------------------------------------
+
+"""
+    Source(domain => rate)
+
+An external source of a non-thermal charge into a body: a prescribed inflow `rate` (a number,
+or a function of time t -> rate). It is a force on `Momentum` [N], a torque on
+`AngularMomentum` [N m], or a current on `Electrical` [A]. The charge comes from outside the
+model and is booked as received (negatively) by the source. The energy P·rate it delivers is
+booked as external work. Connect it with `connect!(sys, source, body)`; pass the
+discontinuities of `rate` as `tstops`.
+"""
+struct Source{D<:FormOfMotion,F}
+    domain::D
+    rate::F
+    function Source(p::Pair{<:FormOfMotion})
+        d, r = first(p), last(p)
+        d isa Thermal && throw(ArgumentError("a Source moves a non-thermal charge; heat sources are not built yet"))
+        r isa Real && !isfinite(r) && throw(ArgumentError("source rate must be finite, got $r"))
+        return new{typeof(d),typeof(r)}(d, r)
+    end
+end
+
+"""
+    GravityField(g)
+
+Uniform gravity on a body with momentum: a momentum source −M g [N], where M is the body's own
+inertial mass and the momentum axis points up. Its work −M g w, which is −d(potential
+energy)/dt, is booked as external work, like a `Source`.
+
+A special-purpose element (D-34): gravity is applied as an external source rather than as a
+height charge, so the framework's rules do not change. **Flagged to revisit** when hydrostatic
+heads, altitude-dependent gravity or height as a state are needed.
+"""
+struct GravityField
+    g::Float64
+    function GravityField(g::Real)
+        isfinite(g) || throw(ArgumentError("g must be finite, got $g"))
+        return new(Float64(g))
     end
 end
 

@@ -102,6 +102,72 @@ function random_gas_network(rng; nbodies, nreservoirs = 0, extra_edges = 2)
     return sys, bodies, reservoirs, edges
 end
 
+# --- slice 6: mechanical systems ------------------------------------------------------------
+
+"""
+    msd_system(; m, k, c, x0, v0 = 0.0, T = 300.0, F = nothing, g = nothing)
+
+A mass on a spring to a fixed frame (`SpringBranch(frame, mass, spring)`: the spring's
+extension is the mass's displacement), a viscous damper to the frame with its heat into a
+reservoir `:env` (omitted for c = 0), an optional force `Source` `:force` on the mass and an
+optional `GravityField` `:gravity`.
+"""
+function msd_system(; m, k, c, x0, v0 = 0.0, T = 300.0, F = nothing, g = nothing)
+    sys = ThermoSystem()
+    mass = add!(sys, Body(:mass, InertialMass(m); w = v0))
+    spring = add!(sys, Body(:spring, LinearSpring(k); x = x0))
+    frame = add!(sys, Reservoir(:frame, Momentum() => 0.0))
+    env = add!(sys, Reservoir(:env; T))
+    connect!(sys, SpringBranch(), frame, mass, spring; name = :branch)
+    c > 0 && connect!(sys, Conductor(LinearConductance(Momentum(), c); dissipation = Into(env)), mass, frame; name = :damper)
+    F === nothing || connect!(sys, Source(Momentum() => F), mass; name = :force)
+    g === nothing || connect!(sys, GravityField(g), mass; name = :gravity)
+    return sys
+end
+
+"Free response of a mass–spring–damper released from x0 at rest (08 G1)."
+function msd_x(t; ζ, ωn, x0)
+    if ζ < 1
+        ωd = ωn * sqrt(1 - ζ^2)
+        return x0 * exp(-ζ * ωn * t) * (cos(ωd * t) + ζ / sqrt(1 - ζ^2) * sin(ωd * t))
+    elseif ζ == 1
+        return x0 * exp(-ωn * t) * (1 + ωn * t)
+    else
+        r = sqrt(ζ^2 - 1)
+        s1, s2 = -ωn * (ζ - r), -ωn * (ζ + r)
+        return x0 * (s1 * exp(s2 * t) - s2 * exp(s1 * t)) / (s1 - s2)
+    end
+end
+
+"""
+    pendulum_system(; m, ℓ, g, θ0, b = 0.0, T = 300.0)
+
+A pendulum as two accumulators: the rod's inertia mℓ² (`:rod`) and the gravitational potential
+mgℓ(1 − cos θ) (`:pot`), joined by a gyrator (dL/dt = −M, dθ/dt = ω). With b > 0, pivot friction
+`:pivot` to a frame, its heat into `:env`.
+"""
+function pendulum_system(; m, ℓ, g, θ0, b = 0.0, T = 300.0)
+    sys = ThermoSystem()
+    rod = add!(sys, Body(:rod, RotationalInertia(m * ℓ^2); ω = 0.0))
+    pot = add!(sys, Body(:pot, PendulumPotential(m, g, ℓ); θ = θ0))
+    connect!(sys, Gyrator(-1.0; a = AngularMomentum(), b = Angle()), rod, pot)
+    if b > 0
+        frame = add!(sys, Reservoir(:frame, AngularMomentum() => 0.0))
+        env = add!(sys, Reservoir(:env; T))
+        connect!(sys, Conductor(LinearConductance(AngularMomentum(), b); dissipation = Into(env)), rod, frame; name = :pivot)
+    end
+    return sys
+end
+
+"Complete elliptic integral of the first kind K(k), by the arithmetic–geometric mean."
+function ellipK(k)
+    a, b = 1.0, sqrt(1 - k^2)
+    while abs(a - b) > 4eps() * a
+        a, b = (a + b) / 2, sqrt(a * b)
+    end
+    return π / (2a)
+end
+
 function _random_edge!(rng, sys, a, b)
     if rand(rng) < 0.5
         return (connect!(sys, Conductor(ThermalConductance(0.01 + 0.09rand(rng))), a, b), :thermal)

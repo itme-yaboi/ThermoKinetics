@@ -2,7 +2,11 @@
 
 Status: **revision 2, reviewed** (2026-10-14). Revision 1's open questions have been answered and folded in (§16 records the answers). Slices 1–5 are built (see `STATUS.md`). Decisions with alternatives are logged in `DECISIONS.md` (referenced as D-n).
 
-**Revision 3 additions, proposed 2026-10-15 and not yet reviewed:** mechanical and rotational systems (§18, D-32) and rockets (§19, D-33). They add §0.1 rows, two domains (§1), materials (§2.3), monotone friction laws (§5.2), spring branches (§6.1), momentum-carrying streams and a nozzle element (§7), force, torque and gravity sources (§8), and slices 7–8 (§15). Nothing in them is built.
+**Revision 3 additions (2026-10-15):**
+- **Mechanical and rotational systems** (§18, D-32): reviewed and accepted with the user's decisions in D-34, and **built as slice 6** (D-35).
+- **Rockets** (§19, D-33): still proposed and not built (slice 8).
+
+Between them they add §0.1 rows, two domains (§1), materials (§2.3), monotone friction laws (§5.2), spring branches (§6.1), momentum-carrying streams and a nozzle element (§7), force, torque and gravity sources (§8), and slices 6–8 (§15).
 
 ## 0. Design in one paragraph
 
@@ -33,9 +37,9 @@ The library exists so that users can build **practically useful thermodynamic si
 | **Process systems** | mixers, splitters and recycle loops, flash drums and separators, compressor trains with intercooling, gas processing and purification, cryogenic plants (e.g. a fusion fuel-cycle tritium plant or cryoplant) | multicomponent streams, real-fluid backend with phase-equilibrium flash, `IdealPump` and compressor/turbine converters, heat exchangers, reactions, switched connections | 3, later | mixer–splitter recycle loop vs. hand mass and energy balance; adiabatic flash drum vs. Rachford–Rice with the backend's K-values; intercooled compressor train work vs. hand calculation, with exergy destruction per stage |
 | **Chemical and nuclear** | reacting mixtures near equilibrium, decay heat, tritium decay inventories | internal transformations (reactions), nuclear sources | later | equilibrium composition vs. Gibbs minimization; decay inventory and heat vs. Bateman |
 | **Coupled and multi-physics** | thermoelectric, electrokinetic, magnetocaloric, MHD pressure drop | coupled conductors (Onsager–Casimir when B ≠ 0), coupled materials | 4 ✅, later (MHD) | C4, C5, C6 ✅ (`test_coupled.jl`); Hartmann-flow MHD pressure drop |
-| **Translational mechanics** (proposed, §18) | mass–spring–damper, multi-mass chains, force or base excitation, vibration isolation, pendulums, viscous, drag and Coulomb friction | `Momentum` bodies (`InertialMass`), `Displacement` springs (`LinearSpring`, `PendulumPotential`), spring branches (converters), dampers (momentum conductors, kernel B), force sources, gravity, monotone friction laws | 5 (masses, gyrators, prescribed drives exist), 7 (proposed) | free mass–spring–damper vs. the analytic response for ζ < 1, = 1, > 1, with the heat to the environment equal to the initial mechanical energy and entropy Q/T; forced response amplitude and phase vs. the transfer function; pendulum period vs. 2π√(ℓ/g) (small) and 4√(ℓ/g)·K(sin θ₀/2) (large amplitude) |
-| **Rotational mechanics** (proposed, §18) | flywheels, shafts, gear trains, rack and pinion, clutches and brakes, motor-driven loads, torsional vibration | `AngularMomentum` bodies (`RotationalInertia`), `Angle` torsion springs, `Transformer` gears, bearing friction, torque sources, switched clutches | 5 (inertias, transformers, DC motor exist), 7 (proposed) | spin-up through a two-stage gear train vs. the reflected inertia J₁ + J₂/r₁² + J₃/(r₁r₂)²; two-inertia torsional frequency; clutch engagement: angular momentum conserved, loss ½J₁J₂Δω²/(J₁+J₂) for any clutch conductance |
-| **Rockets and propulsion** (proposed, §19) | the rocket equation, cold-gas thrusters, a simplified bipropellant engine (feed, combustion chamber, nozzle) on a test stand and in flight | moving variable-mass bodies, momentum-carrying streams, reactions (slice 6) in an ideal-gas mixture with formation enthalpies, an ideal nozzle element, gravity, drag | 8 (proposed; needs 6 and 7) | cold-gas thruster Δv vs. ∫ c_eff dm/M along the isentropic blowdown (closed form); static fire: T_c, p_c, c*, C_F and I_sp vs. a hand calculation with the same property model; flight: Δv vs. Tsiolkovsky c_eff ln(m₀/m_f) − g t_b, with momentum and energy closure |
+| **Translational mechanics** (§18) | mass–spring–damper, multi-mass chains, force or base excitation, vibration isolation, pendulums, viscous, drag and Coulomb friction | `Momentum` bodies (`InertialMass`), `Displacement` springs (`LinearSpring`), `PendulumPotential`, spring branches (converters), dampers (momentum conductors, kernel A or B), force sources, gravity, monotone friction laws | 5 (masses, gyrators, prescribed drives), 6 ✅ | free mass–spring–damper vs. the analytic response for ζ < 1, = 1, > 1, with the heat to the environment equal to the initial mechanical energy and entropy Q/T; forced response amplitude and phase vs. the transfer function, and mean power in = mean dissipation; pendulum period vs. 4√(ℓ/g)·K(sin θ₀/2) from small (→ 2π√(ℓ/g)) to large amplitude, and the damped pendulum's heat (08 G1, G2, G5; `test_applications.jl`) ✅ |
+| **Rotational mechanics** (§18) | flywheels, shafts, gear trains, rack and pinion, clutches and brakes, motor-driven loads, torsional vibration | `AngularMomentum` bodies (`RotationalInertia`), `Angle` torsion springs, `Transformer` gears, bearing friction, torque sources, switched clutches | 5 (inertias, transformers, DC motor), 6 ✅ | spin-up through a two-stage gear train vs. the reflected inertia J₁ + J₂/r₁² + J₃/(r₁r₂)²; two-inertia torsional frequency; clutch engagement: angular momentum conserved, loss ½J₁J₂Δω²/(J₁+J₂) for any clutch conductance (08 G6–G8; `test_applications.jl`) ✅ |
+| **Rockets and propulsion** (proposed, §19) | the rocket equation, cold-gas thrusters, a simplified bipropellant engine (feed, combustion chamber, nozzle) on a test stand and in flight | moving variable-mass bodies, momentum-carrying streams, reactions (slice 7) in an ideal-gas mixture with formation enthalpies, an ideal nozzle element, gravity, drag | 8 (proposed; needs 6 ✅ and 7) | cold-gas thruster Δv vs. ∫ c_eff dm/M along the isentropic blowdown (closed form); static fire: T_c, p_c, c*, C_F and I_sp vs. a hand calculation with the same property model; flight: Δv vs. Tsiolkovsky c_eff ln(m₀/m_f) − g t_b, with momentum and energy closure |
 
 Cross-cutting, for every use:
 - **network plotting**: a schematic diagram of any model (bodies, reservoirs and elements laid out with the compact orthogonal algorithm of §17), optionally coloured by results such as temperature, pressure or entropy production;
@@ -59,8 +63,8 @@ struct Species     <: FormOfMotion; name::Symbol end  # m_k [kg], μ_k [J/kg]
 struct Momentum     <: FormOfMotion end              # p [kg·m/s], w [m/s] (one axis; vector form later, D-29)
 struct AngularMomentum <: FormOfMotion end
 struct FluxLinkage <: FormOfMotion end              # Λ [Wb], i [A] (inductor)
-struct Displacement <: FormOfMotion end             # x [m], F [N] (spring; proposed, §18.1)
-struct Angle       <: FormOfMotion end              # θ [rad], M [N·m] (torsion spring; proposed, §18.1)
+struct Displacement <: FormOfMotion end             # x [m], F [N] (spring; §18.1)
+struct Angle       <: FormOfMotion end              # θ [rad], M [N·m] (torsion spring; §18.1)
 # … polarization, magnetic, surface, gravitational height
 
 # traits (the whole "domain API")
@@ -121,8 +125,8 @@ gas_and_wall_charge = Composite(IdealGas(He; ...),      # part 1: (Thermal, Volu
 | `ElasticVolume(C; V0, p0)` | V | −p0(V − V0) + (V − V0)²/(2C) | uncoupled volumetric store (Veinik's linear one-DOF body); not a gas (D-22) |
 | `LinearCapacitor(C)` | q | q²/(2C) | |
 | `InertialMass(m)` | p⃗ | \|p⃗\|²/(2m) | force = velocity |
-| `LinearSpring(k; x0)`, `TorsionSpring(k; θ0)` (proposed, §18.2) | x or θ | ½k(x − x₀)² | force = tension or torque |
-| `PendulumPotential(m, g, ℓ)` (proposed, §18.2) | θ | mgℓ(1 − cos θ) | not convex for \|θ\| ≥ π/2 (an inverted pendulum is unstable) |
+| `LinearSpring(k; x0)`, `TorsionSpring(k; θ0)` (§18.2) | x or θ | ½k(x − x₀)² | force = tension or torque |
+| `PendulumPotential(m, g, ℓ)` (§18.2) | θ | mgℓ(1 − cos θ) | not convex for \|θ\| ≥ π/2 (an inverted pendulum is unstable); `stiffness_floor` = mgℓ |
 | `Moving(material; m_dry)` (proposed, §19.2) | the material's charges and p | U_int(E) + p²/(2M), M = m_dry + Σ m_k | variable-mass kinetic body; μ_k = μ_k,int − w²/2 |
 
 ### 2.4 Property backends and the Newton inversion
@@ -190,7 +194,7 @@ apply!(du, ledger_rates, transfer, layout)        # assembler-owned; one method 
 | `ConverterTransfer` | ideal converters | **not conserved** (the one exception) | exact: Pᵀ W P ≡ 0 | none |
 | `StreamTransfer` | streams, ideal pumps, flow boundaries, pass-through outlets; nozzles (proposed, §19.4) | conserved (momentum too, when both ends carry it) | exact; pump work booked as external | advected + generation ≥ 0 |
 | `InternalTransfer` | reactions (inside one body) | per stoichiometry (elements) | exact (dU = 0) | A·J/T ≥ 0 |
-| `SourceTransfer` | external sources (heat, charge, nuclear; force, torque and gravity, proposed, §18.6) | external, ledgered | external, ledgered | Q̇/T booked as **boundary** flow |
+| `SourceTransfer` | external sources (heat, charge, nuclear; force, torque and gravity, §18.6) | external, ledgered | external, ledgered | Q̇/T booked as **boundary** flow |
 
 The five `apply!` methods are the *only* code that writes `du` (D-3). A wrong law gives a wrong flux, but it cannot create charge, break energy conservation, or produce negative entropy.
 
@@ -250,7 +254,7 @@ ScalarConductance(g)  # g ≥ 0 asserted at construction (errors, never clamps)
   - **Calibrated laws** (`ThermoelectricConductance`, `KnudsenBarrier`) choose that dependence so their engineering law holds exactly at any finite ΔT: J_e = (Δφ + αΔT)/R with Π = αT̄; J_m = 0 exactly at p/√T equal.
   - **Constant matrices** (`OnsagerConductance`) are validated symmetric PSD. Coefficient data from other bases are mapped by **congruence** M = A L Aᵀ (not only diagonal), which preserves symmetry, PSD and entropy production: `barrier_mass_basis` ((J_v, J_s) → (heat, mass)), `electrokinetic_mass_basis` ((J_e, J_v) → (charge, mass)), `thermoelectric_from_veinik` ((277) → R, K, α). See D-27.
 - **Gauge invariance:** only differences ΔP_k enter.
-- **Monotone single-row laws (proposed, §18.4):** J = f(ΔP) with f odd, nondecreasing and f(0) = 0, so D = ΔP·f(ΔP) ≥ 0 by type. Kernel B's proof needs only D ≥ 0 and D independent of T_m, so these use kernel B unchanged. They come only as closed forms, so the sign stays a property of the type: `QuadraticDrag(c)` (J = c\|Δ\|Δ) and `CoulombFriction(F_c; w_ε)` (J = F_c tanh(Δ/w_ε)).
+- **Monotone single-row laws (§18.4):** J = f(ΔP) with f odd, nondecreasing and f(0) = 0, so D = ΔP·f(ΔP) ≥ 0 by type. Kernel B's proof needs only D ≥ 0 and D independent of T_m, so these use kernel B unchanged. They come only as closed forms, so the sign stays a property of the type: `QuadraticDrag(c)` (J = c\|Δ\|Δ) and `CoulombFriction(F_c; w_ε)` (J = F_c tanh(Δ/w_ε)).
 
 ### 5.3 Special conductors (same kernels)
 
@@ -268,7 +272,7 @@ An ideal converter is a constant antisymmetric coupling: F = W P with W = −W�
 - Two-port form: J₁ = r·P₂ and J₂ = −r·P₁.
 - **Piston:** `Volumetric` ↔ `Momentum`, with r = A_p.
 - **Motor:** `FluxLinkage` ↔ `AngularMomentum`.
-- **Spring branch (proposed, §18.3):** `SpringBranch()` (`Momentum`, `Momentum`, `Displacement`) and `TorsionBranch()` (`AngularMomentum`, `AngularMomentum`, `Angle`). These are the mechanical twins of `InductorBranch`.
+- **Spring branch (§18.3):** `SpringBranch()` (`Momentum`, `Momentum`, `Displacement`) and `TorsionBranch()` (`AngularMomentum`, `AngularMomentum`, `Angle`). These are the mechanical twins of `InductorBranch`.
 
 Converters are explicit (an ODE) because one side carries a kinetic DOF. Real converters are an ideal converter plus loss conductors.
 
@@ -360,9 +364,9 @@ PassThroughOutlet(u, ṁ_spec)    # external outflow at the upstream state, no g
   - A prescribed rate with ν validated for nucleon number and charge.
   - Q̇ is deposited as Q̇/T at the local T and booked as external.
 - **External sources** (heating, cooling, charge injection): `SourceTransfer`, booked as boundary flow. Their entropy can have either sign, and they never touch Ṡ_gen.
-- **Mechanical sources (proposed, §18.6):**
-  - `Source(domain => rate(t))` prescribes a non-thermal charge inflow: a force into `Momentum`, a torque into `AngularMomentum`, a current into `Electrical`. Its energy P·rate is booked as external work.
-  - `GravityField(g)` is a state-dependent momentum source, −M g on each moving body, where M is the body's own inertial mass. Its work is ledgered.
+- **Mechanical sources (§18.6, built in slice 6):**
+  - `Source(domain => rate(t))` prescribes a non-thermal charge inflow into a body: a force into `Momentum`, a torque into `AngularMomentum`, a current into `Electrical`. Its energy P·rate is booked as external work, and the charge as received (negatively) by the source. Heat sources are not this element and are not built yet.
+  - `GravityField(g)` is a momentum source, −M g on a body, where M is the body's own inertial mass. Its work is ledgered. It is a special-purpose element, flagged to revisit (D-34).
 
 ## 9. Switched connections (built in slice 5: Boolean gates, D-29)
 
@@ -536,9 +540,14 @@ still sound.
 4. **Slice 4 — ✅ done 2026-10-14** (deviations: D-27): coupled conductors (Knudsen barrier, thermoelectric couple); `Electrical` and `LinearCapacitor`; resistor with kernel B. Tests: C3, C4, C5, C6 (with the basis transformations), D1, D2.
 5. **Slice 5 — ✅ done 2026-10-14** (deviations: D-29): the mass-matrix DAE path — transformer converters, zero-capacity non-thermal nodes, kinetic DOFs and gyrator converters. Tests: E1, E2, plus DAE consistency (constraint residuals at round-off, Pᵀ F ≡ 0).
 - **Plotting track P (independent of the physics slices; not started).** Network plotting per §17: display metadata on the graph, the Freivalds–Glagoļevs layout, edge routing, a Makie-based renderer. It can be scheduled between any two slices when the user asks for it.
-6. **Slice 6 — next (chosen by the user, 2026-10-15): reactions and nuclear sources** (§8, D-11). Scope and tests are to be detailed when the slice starts. Slice 8 needs two things from it: an ideal-gas mixture material with per-species formation enthalpy and standard entropy (so the affinity carries the heat of reaction), and the reaction element.
-7. **Slice 7 — proposed (revision 3, not reviewed): mechanical and rotational systems** (§18, D-32). It adds `Displacement` and `Angle`, springs, `PendulumPotential`, spring branches, `Source`, `GravityField`, `QuadraticDrag` and `CoulombFriction`. Tests are in §18.8. It does not depend on slice 6 and could go before it.
-8. **Slice 8 — proposed (revision 3, not reviewed): rockets** (§19, D-33). It adds `Moving`, momentum-carrying streams and pumps, and `Nozzle`. Tests are in §19.5. It needs slices 6 and 7.
+6. **Slice 6 — ✅ done 2026-10-15** (deviations: D-35): mechanical and rotational systems (§18, D-32, D-34).
+   - Added `Displacement` and `Angle`, `LinearSpring`, `TorsionSpring` and `PendulumPotential` (with the `stiffness_floor` tolerance hook), `SpringBranch` and `TorsionBranch`, `QuadraticDrag` and `CoulombFriction`, `Source` and `GravityField`.
+   - Gears, rack and pinion and clutches use the existing `Transformer` and `Switched`.
+   - Tests: 08 §G G1–G9, a random-chain A1/A3 property test, rack and pinion, and a motor with a gearbox.
+7. **Slice 7 — next: reactions and nuclear sources** (§8, D-11). Scope and tests are to be detailed when the slice starts.
+   - It includes a sign-preserving nonlinear (mass-action) rate law alongside the linear affinity law, if it fits A·J ≥ 0 by type; otherwise that goes to future work with the reason (D-34).
+   - Slice 8 needs two things from it: an ideal-gas mixture material with per-species formation enthalpy and standard entropy (so the affinity carries the heat of reaction), and the reaction element.
+8. **Slice 8 — proposed (revision 3, not reviewed): rockets** (§19, D-33). It adds `Moving`, momentum-carrying streams and pumps, `Nozzle`, and a displacement (∫ w dt) ledger on `GravityField` for variable-mass bodies. Tests are in §19.5. It needs slices 6 and 7.
 9. **Later** (order to be agreed with the user): E3 (rectangular cycle; switching and time-varying reservoirs already exist), E4 (Otto), the Clapeyron backend with Newton inversion, two-phase flash, the momentum vector domain, inertance-driven streams, 3-D rigid-body rotation (§18.7).
 
 ## 16. Review record (revision 1 questions)
@@ -680,9 +689,9 @@ Layout output: a `NetworkLayout` with box rectangles per vertex and polyline rou
 - **Quality smoke tests:** grid-like models (a rod, a 2-D slab) come out planar with straight edges, like the partial-grid results in the paper's Fig. 4(a).
 - **Renderer:** a CairoMakie smoke test that writes a PNG for a small model with an overlay (in the extension's tests).
 
-## 18. Mechanical and rotational systems (proposed, revision 3; slice 7)
+## 18. Mechanical and rotational systems (revision 3; built in slice 6)
 
-*Proposed 2026-10-15, not reviewed. Decisions: D-32.*
+*Proposed 2026-10-15, accepted by the user with the decisions in D-34, built as slice 6 (D-35). Decisions: D-32, D-34, D-35.*
 
 Most of what mechanics needs already exists:
 - the `Momentum` and `AngularMomentum` forms of motion, `InertialMass` and `RotationalInertia`;
@@ -722,7 +731,7 @@ struct Angle        <: FormOfMotion end   # θ [rad], torque M [N·m]  (rotation
 - `PendulumPotential` holds gravity reduced to the pendulum's single coordinate, so the pendulum's energy stays inside the model.
 - It is not convex: A = mgℓ cos θ ≤ 0 for |θ| ≥ π/2. That is physics (an inverted pendulum is unstable), so `is_stable` is correctly false there.
 - It breaks the 1/A_kk tolerance scaling (D-20 §1). A zero A currently falls back to 1e-12·max(|E|, 1), and a small A gives a huge tolerance.
-  - **Slice 7 must add a material hook for the charge scale.** Here that scale is mgℓ, the value at θ = 0.
+  - **Built:** the material hook `stiffness_floor(mat)` (per charge, default 0). Tolerances and steady-state scaling use max(|A_kk|, floor). For `PendulumPotential` the floor is mgℓ, the value at θ = 0.
 
 ### 18.3 Spring branches (converters)
 
@@ -764,14 +773,16 @@ A spring is a body, joined to its two moving nodes by a 3-port converter. It is 
 - **Already available alternatives:**
   - base excitation: a prescribed velocity drive (a time-varying `Momentum` reservoir);
   - a dead weight: a constant-force `Displacement` reservoir through a `Gyrator`.
-- **`GravityField(g)` on bodies with `Momentum`:**
-  - a momentum source −M g, where M is the body's own inertial mass (`InertialMass` m, or the total mass of a `Moving` body, §19.2);
-  - its work (−ΔPE) and the displacement ∫ w dt are ledgered;
+- **`GravityField(g)` on bodies with `Momentum`** (chosen, D-34; **flagged: may need to change**):
+  - a momentum source −M g, where M is the body's own inertial mass (`inertial_mass(mat)`: `InertialMass` m, or a `Composite`'s parts). For a `Moving` body (§19.2) M will be its total mass, a function of its state;
+  - the momentum axis points up;
+  - its work (−ΔPE) is ledgered. For a constant mass the height change is −W/(Mg). The displacement ledger ∫ w dt, which a variable mass needs, is deferred to slice 8;
   - it is one-axis, consistent with D-29 §4.
-- **Rejected for now: height as a charge with U ∋ Mgh** (Veinik (11)).
-  - It would keep potential energy inside the model, and streams would get μ + gz automatically (`07` §4, §7.4).
-  - But it needs a kinematic converter dh/dt = w between two domains of the *same* body, which the converter rule forbids (ports on distinct nodes, D-29 §3).
-  - It only pays off for hydrostatic heads. Revisit with balance-of-plant elevation heads.
+- **The general rule behind this choice** (D-34, CLAUDE.md): an explicit, ledgered, special-purpose element is preferred to a change of the framework's rules.
+- **Not chosen: height as a charge with U ∋ Mgh** (Veinik (11)).
+  - It is the same form as dQ = F dx. For a constant mass it already works with no rule change: a separate weight body joined by a converter. `PendulumPotential` is that pattern.
+  - For a variable mass, h must live in the body that holds the mass. dh/dt = w then needs a converter between two domains of the *same* body, which the converter rule forbids (ports on distinct nodes, D-29 §3). It would also convert inside a body whose p–h part is uncoupled.
+  - **Revisit when** hydrostatic or elevation heads (μ + gz in streams), altitude-dependent gravity, or height as a state are needed.
 
 ### 18.7 Out of scope (would need a design change)
 
@@ -816,7 +827,7 @@ A spring is a body, joined to its two moving nodes by a 3-port converter. It is 
 
 *Proposed 2026-10-15, not reviewed. Feasibility study and design. Decisions: D-33.*
 
-**Verdict: possible within the framework.** It needs reactions (slice 6) and the mechanics additions (§18), plus three new pieces:
+**Verdict: possible within the framework.** It needs reactions (slice 7) and the mechanics additions (§18, built in slice 6), plus three new pieces:
 - a moving variable-mass material;
 - momentum carried by streams;
 - an ideal nozzle element.
@@ -906,7 +917,7 @@ with the frozen chamber composition setting k and R (Veinik §59 (448), (453)). 
   - Pump-fed: an `IdealPump` per propellant (single species, as built), at prescribed ṁ, which sets O/F.
   - Pressure-fed: a `Stream` with `HydraulicConductance` (blowdown).
 - **Chamber:**
-  - A `Moving` body with an ideal-gas mixture (H₂, O₂, H₂O; optionally dissociation species) and one reaction, 2H₂ + O₂ ⇌ 2H₂O, from slice 6.
+  - A `Moving` body with an ideal-gas mixture (H₂, O₂, H₂O; optionally dissociation species) and one reaction, 2H₂ + O₂ ⇌ 2H₂O, from slice 7.
   - The reaction is run fast (its time constant ≪ the residence time), so the chamber sits at chemical equilibrium, as standard performance calculations assume.
   - The nozzle is frozen: no reaction inside it.
 - **Flight:**
@@ -943,7 +954,7 @@ with the frozen chamber composition setting k and R (Veinik §59 (448), (453)). 
   - Real performance needs c_p(T) (NASA polynomials) and dissociation species.
   - c_p(T) needs the 1-D Newton inversion of §2.4, planned with the Clapeyron backend. The element interfaces do not change.
 - **Frozen nozzle flow;** no shifting equilibrium.
-- **Not real combustion kinetics.** The linear affinity law J = M_r A/T is right for an equilibrium chamber, but it does not model ignition or kinetics-limited combustion. Those need a sign-preserving nonlinear rate law (mass action: J ∝ 1 − e^(−A/RT), with A·J ≥ 0), a design question for slice 6.
+- **Not real combustion kinetics.** The linear affinity law J = M_r A/T is right for an equilibrium chamber, but it does not model ignition or kinetics-limited combustion. Those need a sign-preserving nonlinear rate law (mass action: J ∝ 1 − e^(−A/RT), with A·J ≥ 0). That law is planned for slice 7 if it fits (D-34).
 - **Gaseous propellants only,** until the real-fluid backend exists (liquid and cryogenic tanks).
 - **One axis:** vertical ascent, or straight-line flight in free space. Gravity turns and attitude dynamics need vector momentum and rigid-body rotation (§18.7).
 - **No feed-line or injector dynamics, and no combustion instability.** These need inertance (deferred).

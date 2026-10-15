@@ -45,12 +45,13 @@ DESIGN.md describes the target. STATUS.md and the code say what exists. When the
 
 ## How to work
 
-1. **Design is approved** (DESIGN.md revision 2, reviewed 2026-10-14). Build in the vertical slices of DESIGN §15. Any change to the design itself (new element kinds, new state representation, a new kind of solver) goes into DESIGN.md and DECISIONS.md and is put to the user for review before it is built.
-2. **Tests first, alongside code.** For each slice, write its tests from `08_validation_cases.md` (§A invariants, then analytic cases B → C → D → E) before the code, then write code until they pass. Every integration test also checks `closure` (energy and entropy balance). When a slice delivers a use from DESIGN §0.1, add its **application test** to `test/test_applications.jl` and mark the row.
+1. **Design is approved** (DESIGN.md revision 2, reviewed 2026-10-14; of the revision 3 additions, mechanics §18 was accepted 2026-10-15, while rockets §19 are still proposed). Build in the vertical slices of DESIGN §15. Any change to the design itself (new element kinds, new state representation, a new kind of solver) goes into DESIGN.md and DECISIONS.md and is put to the user for review before it is built.
+2. **Tests first, alongside code.** For each slice, write its tests from `08_validation_cases.md` (§A invariants, then analytic cases B → C → D → E → G) before the code, then write code until they pass. Every integration test also checks `closure` (energy and entropy balance). When a slice delivers a use from DESIGN §0.1, add its **application test** to `test/test_applications.jl` and mark the row.
 3. **Keep `src/` minimal**: only what the current slice needs.
 4. When a book equation and a non-negotiable disagree, the non-negotiable wins. Note the disagreement in `docs/DECISIONS.md`.
 5. **DECISIONS.md is append-only**: one entry per decision, with alternatives considered. Log any deviation from DESIGN.md there. Supersede old entries rather than rewriting them.
 6. **No ModelingToolkit, anywhere** (D-2).
+6a. **Generality over special cases** (D-34). Never bend the framework's rules (element kinds, the converter and conductor contracts, the bookkeeping) to fit one use case. Prefer an explicit, ledgered, special-purpose element (a "virtual" one-off component such as `GravityField`, a momentum source) that enables the case within the existing rules. Record each such element in DECISIONS.md, flag it as a candidate to revisit, and say when it would need to change.
 7. `docs/veinik/` belongs to the user. Change it only with the user's approval, and say exactly which lines changed.
 
 ## End of every slice (do this without being asked)

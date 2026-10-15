@@ -212,6 +212,22 @@ struct CompiledTransformer{EA,EB}
     ea::EA; eb::EB
 end
 
+"A constant rate, called like a function of time."
+struct ConstRate
+    v::Float64
+end
+(r::ConstRate)(t) = r.v
+
+"An external source into a body: charge `rate(t)` into slot `c` at force index `f`."
+struct CompiledSource{F}
+    name::Symbol
+    rate::F
+    node::Int
+    f::Int
+    c::Int
+    led::Int                        # charge received by the source (−rate), then external work supplied
+end
+
 "A gated element (D-14): applied only while `on(t)`."
 struct CompiledSwitched{C,F}
     name::Symbol
@@ -236,7 +252,9 @@ Flat lowering of a `ThermoSystem`. State layout: `u = [u_phys; u_alg; q_ledger]`
 - pumps: production, then external work supplied;
 - flow boundaries: production, work, and the mass of each species, entropy and energy
   *received* (negative: they supply);
-- outlets: mass of each species, entropy and energy received.
+- outlets: mass of each species, entropy and energy received;
+- sources and gravity fields: the charge received (negative: they supply), then external work
+  supplied.
 
 Then, for each reservoir: the charge received in each of its domains (entropy for
 `Thermal`), then energy. Ledgers never feed back into the dynamics (D-10). Forces live in a
@@ -327,6 +345,7 @@ _nledger(el::FlowBoundary) = 2 + length(mass_slots(el.material)) + 2
 _nledger(el::PassThroughOutlet, nspecies::Int) = nspecies + 2
 _nledger(::Converter) = 0
 _nledger(::Transformer) = 0
+_nledger(::Union{Source,GravityField}) = 2
 
 """
     compile(sys) -> CompiledSystem
@@ -444,6 +463,10 @@ function compile(sys::ThermoSystem)
             vcat(Any[:S, :U], Any[d for d in domains(el.material) if d isa Species], Any[:S, :U])
         elseif el isa PassThroughOutlet
             vcat(Any[d for d in species_of(node_index[port_node(sys, e, :a)])], Any[:S, :U])
+        elseif el isa Source
+            Any[el.domain, :U]
+        elseif el isa GravityField
+            Any[Momentum(), :U]
         else
             error("internal: no ledger kinds for $(typeof(el))")
         end
@@ -627,6 +650,26 @@ function compile(sys::ThermoSystem)
             push!(moves, ([ia, ib], unique(FormOfMotion[el.a, el.b]), true))
             foreach(d -> d in converted || push!(converted, d), (el.a, el.b))
             mark_active!((c.ca, c.cb))
+        elseif el isa Union{Source,GravityField}
+            nl = port_node(sys, e, :a)
+            i = node_index[nl]
+            i <= nb || throw(ArgumentError("source :$e must act on a body, not on :$nl"))
+            d = el isa Source ? el.domain : Momentum()
+            force_index(i, d) == 0 && throw(ArgumentError("source :$e supplies $d, but :$nl has no such form of motion"))
+            rate = if el isa GravityField
+                M = inertial_mass(node_obj(i).material)
+                M === nothing && throw(ArgumentError("gravity :$e needs a body with an inertial mass; :$nl has none"))
+                ConstRate(-el.g * M)
+            else
+                el.rate isa Real ? ConstRate(Float64(el.rate)) : el.rate
+            end
+            c = CompiledSource(e, rate, i, force_index(i, d), charge_target(i, d), first(r))
+            push!(compiled, c)
+            work_led[e] = first(r) + 1
+            push!(ext_charges, (d, first(r)))
+            push!(touch, ([i], r))
+            push!(moves, ([i], FormOfMotion[d], true))
+            mark_active!((c.c,))
         else
             error("unsupported element $(typeof(el))")
         end
@@ -969,6 +1012,20 @@ function _transformer_rows!(du, P, u, cs::CompiledSystem)
         g = P[c.fa] - c.r * P[c.fb]
         du[c.λ] = _dforce(c.ea, u, du) - c.r * _dforce(c.eb, u, du) + g / c.τ
     end
+    return nothing
+end
+
+"External source: the charge rate J into the body, and the energy P·J it delivers (external work)."
+function transfer(c::CompiledSource, P, u, cs::CompiledSystem, t)
+    J = c.rate(t)
+    return (; J, W = P[c.f] * J)
+end
+
+function _apply!(du, P, u, c::CompiledSource, cs, t)
+    tr = transfer(c, P, u, cs, t)
+    @inbounds du[c.c] += tr.J
+    @inbounds du[c.led] -= tr.J                  # received by the source (negative: it supplies)
+    @inbounds du[c.led+1] += tr.W                # external work supplied
     return nothing
 end
 
