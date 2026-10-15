@@ -1,4 +1,4 @@
-# DESIGN — VeinikThermo.jl
+# DESIGN — ThermoKinetics.jl
 
 Status: **revision 2, reviewed** (2026-10-14). Revision 1's open questions have been answered and folded in (§16 records the answers). Slices 1–5 are built (see `STATUS.md`). Decisions with alternatives are logged in `DECISIONS.md` (referenced as D-n).
 

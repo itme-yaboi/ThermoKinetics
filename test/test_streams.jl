@@ -21,7 +21,7 @@
 
         air = Reservoir(:air; T = 300.0, p = 1e5, material = N2)
         @test domains(air) == (Thermal(), Volumetric(), Species(:N2))
-        @test VeinikThermo.reservoir_force(air, Species(:N2)) ≈ sμ(N2, 300.0, 1e5)[2] rtol = 1e-12
+        @test ThermoKinetics.reservoir_force(air, Species(:N2)) ≈ sμ(N2, 300.0, 1e5)[2] rtol = 1e-12
 
         sys = ThermoSystem()
         a = add!(sys, Body(:a, N2; T = 300.0, p = 2e5, m = 1e-3))

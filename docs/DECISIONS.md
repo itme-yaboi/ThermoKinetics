@@ -536,6 +536,11 @@ Each item lists what was built instead of the design text, and why.
 - **Alternatives:** keep it tracked in a private repository (the summaries are close paraphrase of copyrighted books).
 - **Consequence:** a fresh clone has no `docs/veinik/`; the author copies it in from a local backup. No code or test reads it.
 
+### D-38 Package renamed `VeinikThermo` → `ThermoKinetics` — accepted (user, 2026-10-15)
+- **Chosen:** the package, module and main file are `ThermoKinetics` (`Project.toml` name, `src/ThermoKinetics.jl`, `using ThermoKinetics`), matching the private GitHub repository `itme-yaboi/ThermoKinetics`. The UUID is unchanged. The local working directory keeps its old name.
+- **Alternatives:** keep `VeinikThermo.jl`; `GeneralizedThermo.jl`, `ThermoNetworks.jl`, `EntropyLedger.jl`, `ChargeForce.jl`.
+- **Why:** the user chose the repository name; Julia expects the repository `Name.jl` and the package `Name` to agree.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

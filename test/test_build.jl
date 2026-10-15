@@ -52,7 +52,7 @@
     end
 
     @testset "SI only: no technical-system constants in src" begin
-        srcdir = joinpath(pkgdir(VeinikThermo), "src")
+        srcdir = joinpath(pkgdir(ThermoKinetics), "src")
         for (root, _, files) in walkdir(srcdir), f in files
             txt = read(joinpath(root, f), String)
             @test !occursin(r"kcal|kgf|\b427\b"i, txt)
@@ -67,7 +67,7 @@ end
     @testset "reservoirs" begin
         r = Reservoir(:atm; T = 300.0, p = 101325.0)
         @test domains(r) == (Thermal(), Volumetric())
-        @test VeinikThermo.reservoir_force(r, Volumetric()) == -101325.0     # stored as the force −p
+        @test ThermoKinetics.reservoir_force(r, Volumetric()) == -101325.0     # stored as the force −p
         @test domains(Reservoir(:hp; p = 2e5)) == (Volumetric(),)
         @test_throws ArgumentError Reservoir(:none)
         @test_throws ArgumentError Reservoir(:bad; p = -1.0)
@@ -94,7 +94,7 @@ end
         sink = add!(sys, Reservoir(:sink; T = 300.0))
         # Into(h) adds a third port; h must be a distinct node
         c = connect!(sys, Conductor(VolumeConductance(1e-9); dissipation = Into(sink)), g1, g2)
-        @test VeinikThermo.port_node(sys, c, :h) == sink
+        @test ThermoKinetics.port_node(sys, c, :h) == sink
         @test_throws ArgumentError connect!(sys, Conductor(VolumeConductance(1e-9); dissipation = Into(g1)), g1, g2)
         @test_throws ArgumentError connect!(sys, Conductor(VolumeConductance(1e-9); dissipation = Into(:nope)), g1, g2)
         @test compile(sys) isa CompiledSystem

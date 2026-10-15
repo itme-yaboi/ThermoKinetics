@@ -1,5 +1,5 @@
 """
-    VeinikThermo
+    ThermoKinetics
 
 Multi-domain thermodynamic modeling on A. I. Veinik's generalized thermodynamics.
 The state is the bodies' charges; forces are P = ∂U/∂E; elements map forces to
@@ -14,7 +14,7 @@ conductors; kinetic forms of motion, ideal converters, junctions and transformer
 DAE), switched connections and time-varying reservoirs; elastic forms of motion (springs, the
 pendulum potential), spring branches, monotone friction laws, force and torque sources and gravity.
 """
-module VeinikThermo
+module ThermoKinetics
 
 using ForwardDiff
 using StaticArrays
@@ -62,4 +62,4 @@ export charges, force, set_temperature!, flux, heat_flow, entropy_production, en
 # spatial helpers
 export rod!
 
-end # module VeinikThermo
+end # module ThermoKinetics

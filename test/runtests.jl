@@ -1,4 +1,4 @@
-using VeinikThermo
+using ThermoKinetics
 using Test
 using Random
 using LinearAlgebra
@@ -6,7 +6,7 @@ using StaticArrays
 
 include("helpers.jl")
 
-@testset "VeinikThermo" begin
+@testset "ThermoKinetics" begin
     include("test_build.jl")          # construction, validation, units hygiene
     include("test_materials.jl")      # state functions: A4, A7, B3
     include("test_kernel.jl")         # conductor bookkeeping identities (kernel A, thermal row)

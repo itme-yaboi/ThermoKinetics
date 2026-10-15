@@ -7,7 +7,7 @@
         G = 10.0^(4 * rand(rng) - 2)                      # 1e-2 … 1e2 W/K
         Ta = 10.0^(1 + 3 * rand(rng))                     # 10 … 1e4 K: ΔT/T up to ~1
         Tb = rand(rng) < 0.1 ? Ta : 10.0^(1 + 3 * rand(rng))
-        tr = VeinikThermo.thermal_transfer(ThermalConductance(G), Ta, Tb)
+        tr = ThermoKinetics.thermal_transfer(ThermalConductance(G), Ta, Tb)
         # energy: heat deliveries sum to the released non-thermal power, which is zero here
         @test tr.Q_a + tr.Q_b == 0
         # the energy-form law is reproduced exactly at any ΔT
@@ -41,15 +41,15 @@ end
 # internal thermal node (kernel B). Checked on the heat-distribution kernel directly.
 @testset "dissipation policies: identities" begin
     rng = MersenneTwister(3)
-    W = VeinikThermo.WeightsPolicy
-    N = VeinikThermo.NodePolicy
+    W = ThermoKinetics.WeightsPolicy
+    N = ThermoKinetics.NodePolicy
     for _ in 1:10_000
         D = rand(rng) < 0.05 ? 0.0 : 10.0^(6rand(rng) - 3)         # released power ≥ 0 [W]
         Ta, Tb, Th = (10.0^(1 + 3rand(rng)) for _ in 1:3)
         w = rand(rng)
         for pol in (W(1 - w, w, 0.0), W(0.0, 0.0, 1.0),
                     N(10.0^(4rand(rng) - 2), 10.0^(4rand(rng) - 2), rand(rng) < 0.5 ? 0.0 : 10.0^(4rand(rng) - 2)))
-            h = VeinikThermo.distribute_heat(pol, D, Ta, Tb, Th)
+            h = ThermoKinetics.distribute_heat(pol, D, Ta, Tb, Th)
             # energy: remainder rule, closes to round-off
             @test abs(h.Q_a + h.Q_b + h.Q_h - D) <= 4eps() * (abs(h.Q_a) + abs(h.Q_b) + abs(h.Q_h) + D)
             @test h.S_gen >= 0                                        # sign-exact ledger
@@ -58,7 +58,7 @@ end
         end
         # kernel B: the node temperature balances its legs, and production splits in two parts
         pol = N(1.0 + rand(rng), 1.0 + rand(rng), 0.0)
-        h = VeinikThermo.distribute_heat(pol, D, Ta, Tb, Th)
+        h = ThermoKinetics.distribute_heat(pol, D, Ta, Tb, Th)
         @test pol.G_a * (h.T_m - Ta) + pol.G_b * (h.T_m - Tb) ≈ D rtol = 1e-9 atol = 1e-9 * (Ta + Tb)
         @test h.parts.dissipation ≈ D / h.T_m rtol = 1e-12
         @test h.parts.dissipation + h.parts.conduction == h.S_gen

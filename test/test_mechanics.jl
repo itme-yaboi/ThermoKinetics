@@ -57,9 +57,9 @@
         end
         for law in (QuadraticDrag(0.7), CoulombFriction(3.0; w_ε = 1e-3), QuadraticDrag(2.0; domain = AngularMomentum()))
             for Δ in vcat(0.0, 1e-12, -1e-12, 10 .^ range(-8, 3; length = 30), -(10 .^ range(-8, 3; length = 30)))
-                J = VeinikThermo.fluxes(law, SVector(Δ))
+                J = ThermoKinetics.fluxes(law, SVector(Δ))
                 @test Δ * J[1] >= 0
-                @test VeinikThermo.fluxes(law, SVector(-Δ))[1] == -J[1]            # odd
+                @test ThermoKinetics.fluxes(law, SVector(-Δ))[1] == -J[1]            # odd
             end
         end
     end
@@ -208,7 +208,7 @@
     @testset "pendulum tolerance scaling: the potential's stiffness floor (A = 0 at θ = π/2)" begin
         m, ℓ, g = 1.0, 1.0, 9.81
         cs = compile(pendulum_system(; m, ℓ, g, θ0 = π / 2))
-        tol = VeinikThermo.abstol_vector(cs)
+        tol = ThermoKinetics.abstol_vector(cs)
         @test tol[2] ≈ 1e-8 / (m * g * ℓ) rtol = 1e-12          # scaled by mgℓ, not by |A| ≈ 0
         Tp = 4 * sqrt(ℓ / g) * ellipK(sin(π / 4))
         sol = simulate(cs, (0.0, Tp); saveat = [Tp / 2, Tp], reltol = 1e-11)

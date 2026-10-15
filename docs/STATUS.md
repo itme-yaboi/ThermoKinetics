@@ -4,6 +4,7 @@
 
 ## Where we are
 
+- **Repository:** the package is `ThermoKinetics` (D-38), on the private GitHub repository `itme-yaboi/ThermoKinetics` (`origin`). `docs/veinik/` and the Veinik section notes are local only and must never be committed (D-36, D-37).
 - **Phase:** build. DESIGN.md revision 2 is approved. Of the revision 3 additions, mechanics (DESIGN §18) is accepted and built; rockets (§19) are still proposed.
 - **Done:** slices 1–6. Slice 6 was mechanical and rotational systems (D-32, D-34, D-35). The plotting design (DESIGN §17) is written but not built.
 - **Next:** slice 7, reactions and nuclear sources. Not started; scope and tests are to be detailed at the start of the slice.

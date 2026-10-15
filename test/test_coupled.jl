@@ -127,7 +127,7 @@
             u3 = steady_state(cs3)
             return [temperature(cs3, u3, c) for c in cells], mass_or_current(cs3, u3)
         end
-        mass_or_current(cs3, u3) = flux(cs3, u3, first(VeinikThermo.conductor_names(cs3))).J[1]
+        mass_or_current(cs3, u3) = flux(cs3, u3, first(ThermoKinetics.conductor_names(cs3))).J[1]
         T_te, I_te = leg_profile(3e-4)
         T_0, I_0 = leg_profile(0.0)
         @test I_te ≈ 2.0 rtol = 1e-9
@@ -156,7 +156,7 @@
         g = ξ * T / v^2
         kb = KnudsenBarrier(N2; g, K = 0.0)
         μ = forces(N2, charges_at(N2; T, p, m = 1.0))[3]
-        Mk = VeinikThermo.coupled_matrix(kb, T, T, SA[μ], SA[μ], 0.5)
+        Mk = ThermoKinetics.coupled_matrix(kb, T, T, SA[μ], SA[μ], 0.5)
         @test Mk[2, 2] ≈ M_mm rtol = 1e-12
         @test Mk[1, 2] ≈ M_Qm rtol = 1e-10
 
