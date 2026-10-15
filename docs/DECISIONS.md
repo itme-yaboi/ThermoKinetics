@@ -463,7 +463,7 @@ Each item lists what was built instead of the design text, and why.
 - **Why:** each piece is a new (E, P) pair, a material, a converter with constant antisymmetric W, a conductance type that is sign-safe by type, or a ledgered source. The assembler, the kernels and the solver are unchanged. That is the architecture's own test (DESIGN §0.1).
 - **To review:** the domain names; `GravityField` as a source rather than (b); whether mechanics goes before reactions (it is independent). *(Answered in D-34: the source, flagged; mechanics first, as slice 6.)*
 
-### D-33 Rockets: feasible with moving variable-mass bodies, momentum-carrying streams and an ideal nozzle — proposed (2026-10-15; DESIGN §19, slice 8)
+### D-33 Rockets: feasible with moving variable-mass bodies, momentum-carrying streams and an ideal nozzle — accepted (user, 2026-10-15, D-47; DESIGN §19, slice 8)
 - **Asked for by the user:** the rocket equation with a simplified engine (combustion, then expansion through a nozzle), with confirmation of whether the framework allows it.
 - **Finding:** it does, after the reactions slice (now slice 7: reactions, plus an ideal-gas mixture with formation enthalpies) and the mechanics slice (now slice 6: gravity, drag). No new solver and no new `Transfer` kind.
 - **Chosen:**
@@ -617,6 +617,10 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 ### D-46 The author's textbooks for examples and validation are local only — accepted (user, 2026-10-15)
 - **Chosen:** `_reference/verification/` (textbooks the author has read) is git-ignored as a whole. They are used to set up example problems and validation cases, cited by book, section and problem number; their text, figures and tables are never copied into the repository. They are not a source for the framework's physics or code (`docs/veinik/` and DESIGN are). The list and the use of each book are in CLAUDE.md.
 - **Alternatives:** track them (copyrighted, D-25/D-30/D-36 precedent); ignore per file type (the folder holds `.pdf` and `.PDF`; a folder rule also covers future additions).
+
+### D-47 Review of DESIGN §19 and D-33 (rockets) — accepted (user, 2026-10-15)
+- **Chosen:** DESIGN §19 and D-33 are accepted as written; slice 8 builds them.
+- **Clarification (slice numbering):** D-33's "To review" line asks whether "slice 6" should support a mass-action rate law. When D-33 was written, the reactions slice was planned as slice 6; D-34 reordered the slices (mechanics became 6, reactions 7) and answered yes. Slice 7 built both `AffinityLaw` and `MassAction` (D-39–D-41). Slice 6 (mechanics) has no rate laws.
 
 ---
 

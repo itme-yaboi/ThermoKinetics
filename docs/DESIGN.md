@@ -615,7 +615,7 @@ still sound.
    - Documenter.jl in its own environment (`docs/Project.toml`, `docs/make.jl`, pages in `docs/src/`; the built site `docs/build/` is git-ignored and local only).
    - Pages: home, getting started (three examples that run during the build), architecture and structure, an API reference covering every export, and the project records (DESIGN, STATUS, DECISIONS copied in at build time, with local-file links made plain text; `docs/veinik/` is never included).
    - Every export has a docstring, checked by the build (`checkdocs = :exports`) and by a test.
-8. **Slice 8 — proposed (revision 3, not reviewed): rockets** (§19, D-33). It adds `Moving`, momentum-carrying streams and pumps, `Nozzle`, and a displacement (∫ w dt) ledger on `GravityField` for variable-mass bodies. Tests are in §19.5. It needs slices 6 and 7.
+8. **Slice 8 — next (accepted, D-47): rockets** (§19, D-33). It adds `Moving`, momentum-carrying streams and pumps, `Nozzle`, and a displacement (∫ w dt) ledger on `GravityField` for variable-mass bodies. Tests are in §19.5. It needs slices 6 and 7.
 9. **Later** (order to be agreed with the user): E3 (rectangular cycle; switching and time-varying reservoirs already exist), E4 (Otto), the Clapeyron backend with Newton inversion, two-phase flash, the momentum vector domain, inertance-driven streams, 3-D rigid-body rotation (§18.7).
 
 ## 16. Review record (revision 1 questions)
@@ -891,7 +891,7 @@ A spring is a body, joined to its two moving nodes by a 3-port converter. It is 
    - the loss is ½J₁J₂(ω₁ − ω₂)²/(J₁ + J₂) for any clutch conductance, and the entropy is loss/T.
 9. **DC motor + gearbox + load:** steady speed and current vs. a hand calculation.
 
-## 19. Rockets: the rocket equation and a simplified engine (proposed, revision 3; slice 8)
+## 19. Rockets: the rocket equation and a simplified engine (revision 3; accepted 2026-10-15, D-47; slice 8)
 
 *Proposed 2026-10-15, not reviewed. Feasibility study and design. Decisions: D-33.*
 

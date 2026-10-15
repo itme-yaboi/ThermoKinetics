@@ -5,9 +5,9 @@
 ## Where we are
 
 - **Repository:** the package is `ThermoKinetics` (D-38), on the private GitHub repository `itme-yaboi/ThermoKinetics` (`origin`). `docs/veinik/` and the Veinik section notes are local only and must never be committed (D-36, D-37).
-- **Phase:** build. DESIGN.md revision 2 is approved. Of the revision 3 additions, mechanics (DESIGN §18) is accepted and built; rockets (§19) are still proposed.
+- **Phase:** build. DESIGN.md revision 2 is approved. Revision 3 is accepted: mechanics (DESIGN §18) is built; rockets (§19) are next.
 - **Done:** slices 1–7 and 7a. Slice 7 was reactions, nuclear and heat sources (D-39 to D-44, all accepted). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
-- **Next:** slice 8, rockets (DESIGN §19, D-33; proposed, not reviewed). Slice 7 supplies the gas mixture with formation enthalpies and the reaction element; the limits are in §19.6.
+- **Next:** slice 8, rockets (DESIGN §19, D-33; accepted, D-47). Slice 7 supplies the gas mixture with formation enthalpies and the reaction element; the limits are in §19.6.
 - **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
 - **Tests:** 192,953 checks pass in ~2.3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
