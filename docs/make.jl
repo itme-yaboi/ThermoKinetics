@@ -21,7 +21,7 @@ function plain_local_links(text)
     end)
 end
 
-for f in ("DESIGN.md", "STATUS.md", "DECISIONS.md")
+for f in ("DESIGN.md", "STATUS.md", "DECISIONS.md", "FAILURE_MODES.md")
     write(joinpath(PROJ, f), plain_local_links(read(joinpath(DOCS, f), String)))
 end
 
@@ -51,6 +51,7 @@ makedocs(
             "Design" => "project/DESIGN.md",
             "Status" => "project/STATUS.md",
             "Decisions" => "project/DECISIONS.md",
+            "Failure modes" => "project/FAILURE_MODES.md",
         ],
     ],
 )

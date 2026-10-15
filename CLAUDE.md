@@ -39,6 +39,7 @@ Everything needed from Veinik's books is in `docs/veinik/` (local only, git-igno
 
 1. Read `docs/STATUS.md`: where the project stands, what is next, known shortcuts.
 2. Read `docs/DESIGN.md` (the target architecture) and `docs/DECISIONS.md` (why things are as they are) as needed for the task. Do not re-open a decision recorded there without new information; supersede it with a new entry instead.
+   Read `docs/FAILURE_MODES.md` (known edge cases where the build may give wrong results or fail) before working in, or reporting results from, an area it covers.
 3. Run the tests (`julia --project=. -e 'using Pkg; Pkg.test()'`) before changing code, so you know the baseline.
 
 DESIGN.md describes the target. STATUS.md and the code say what exists. When they differ, believe the code and fix the docs.
@@ -56,13 +57,14 @@ DESIGN.md describes the target. STATUS.md and the code say what exists. When the
 3. **Keep `src/` minimal**: only what the current slice needs.
 4. When a book equation and a non-negotiable disagree, the non-negotiable wins. Note the disagreement in `docs/DECISIONS.md`.
 5. **DECISIONS.md is append-only**: one entry per decision, with alternatives considered. Log any deviation from DESIGN.md there. Supersede old entries rather than rewriting them.
+5a. **Known failure modes go in `docs/FAILURE_MODES.md`** (D-54): whenever a decision is accepted knowing it can fail or give a wrong result in some cases, or such a case is found, add or update its FM entry in the same commit (what, when, why accepted, detect, do, revisit). Only failure scenarios belong there, not missing features. That file is kept current (entries rewritten; a fixed one is deleted and the fix logged in DECISIONS).
 6. **No ModelingToolkit, anywhere** (D-2).
 6a. **Generality over special cases** (D-34). Never bend the framework's rules (element kinds, the converter and conductor contracts, the bookkeeping) to fit one use case. Prefer an explicit, ledgered, special-purpose element (a "virtual" one-off component such as `GravityField`, a momentum source) that enables the case within the existing rules. Record each such element in DECISIONS.md, flag it as a candidate to revisit, and say when it would need to change.
 7. `docs/veinik/` belongs to the user. Change it only with the user's approval, and say exactly which lines changed.
 
 ## End of every slice (do this without being asked)
 
-1. Full test suite passes; note the count and run time. The HTML docs build without warnings (`julia --project=docs docs/make.jl`), every new export has a docstring and an entry in `docs/src/api/`, and `docs/src/architecture.md` is updated if the structure changed.
+1. Full test suite passes; note the count and run time. `docs/FAILURE_MODES.md` reflects the slice (new failure modes added, fixed ones removed). The HTML docs build without warnings (`julia --project=docs docs/make.jl`), every new export has a docstring and an entry in `docs/src/api/`, and `docs/src/architecture.md` is updated if the structure changed.
 2. Update `docs/STATUS.md`: rewrite it to the current state (not a log).
 3. Mark the slice done in DESIGN §15. Update any DESIGN text the implementation proved wrong, logging the change in DECISIONS.md.
 4. Update this file if the working rules changed.
@@ -80,6 +82,7 @@ The author previously built a Julia thermal library (ThermalModeling / TSM), a c
 |---|---|
 | Çengel, Boles & Kanoğlu, *Thermodynamics: An Engineering Approach*, 9e | cycles (Rankine, Brayton, Otto, refrigeration), control-volume and control-mass problems, exergy, property tables |
 | Incropera et al., *Fundamentals of Heat and Mass Transfer* | conduction (steady, transient, fins), convection correlations, radiation, heat exchangers, diffusion |
+| Mitchell, *Fox and McDonald's Introduction to Fluid Mechanics*, 10e | pipe flow and friction factors, minor losses, flow networks and pumps, hydrostatics and elevation heads, compressible flow (nozzles, choking, shocks) |
 | Beer & Johnston, *Vector Mechanics for Engineers: Dynamics* | translational and rotational dynamics, vibrations |
 | Esfandiari & Lu, *Modeling and Analysis of Dynamic Systems* | multi-domain lumped models: mechanical, electrical, fluid, thermal, electromechanical |
 | Seborg et al., *Process Dynamics and Control*; *Chemical Process Dynamics and Controls* | reactors, tanks, process dynamics, control loops |
