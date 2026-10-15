@@ -578,3 +578,231 @@ end
         @test isempty(cl.elements)                                                # no reactions here
     end
 end
+
+@testset "applications: rockets" begin
+    g0 = 9.80665
+
+    "Supersonic root of the area–Mach relation, by bisection (independent of the library)."
+    function mach_of(ε, k)
+        f(M) = (1 / M) * ((2 / (k + 1)) * (1 + (k - 1) / 2 * M^2))^((k + 1) / (2 * (k - 1))) - ε
+        lo, hi = 1.0, 100.0
+        for _ in 1:200
+            mid = (lo + hi) / 2
+            f(mid) > 0 ? (hi = mid) : (lo = mid)
+        end
+        return (lo + hi) / 2
+    end
+    "Ideal frozen nozzle from (T_c, p_c, k, R): ṁ per throat area, v_e, p_e, vacuum c_eff."
+    function ideal_nozzle(Tc, pc, k, R, At, ε)
+        Γ = sqrt(k) * (2 / (k + 1))^((k + 1) / (2 * (k - 1)))
+        mdot = At * pc * Γ / sqrt(R * Tc)
+        Me = mach_of(ε, k)
+        Te = Tc / (1 + (k - 1) / 2 * Me^2)
+        pe = pc * (Te / Tc)^(k / (k - 1))
+        cp = k * R / (k - 1)
+        ve = sqrt(2cp * (Tc - Te))
+        F = mdot * ve + pe * ε * At
+        return (; mdot, Me, Te, pe, ve, F, c_eff = F / mdot, cstar = pc * At / mdot)
+    end
+
+    @testset "cold-gas thruster: isentropic tank, Δv by quadrature, thrust = ṁ c_eff" begin
+        N2d = N2g()
+        R = R̄ / molar_mass(N2d); cv = N2d.cv; k = (cv + R) / cv
+        gas = IdealGas(:N2; R, cv)
+        m_dry, T0, p0, V = 5.0, 300.0, 200e5, 0.05
+        m0 = p0 * V / (R * T0)
+        At, ε = 1e-5, 50.0
+        sys = ThermoSystem()
+        add!(sys, Body(:tank, Moving(gas; m_dry); T = T0, V, m = m0, w = 0.0))
+        connect!(sys, Nozzle(At, ε), :tank; name = :jet)
+        cs = compile(sys)
+        c0 = ideal_nozzle(T0, p0, k, R, At, ε).c_eff
+        c_eff(m) = c0 * (m / m0)^((k - 1) / 2)                     # √T on the isentrope
+        τ = m0 / ideal_nozzle(T0, p0, k, R, At, ε).mdot
+        ts = [0.1, 0.3, 0.6, 1.0] .* τ
+        sol = simulate(cs, (0.0, ts[end]); saveat = ts)
+        for u in sol.u
+            m = charges(cs, u, :tank)[3]
+            @test temperature(cs, u, :tank) ≈ T0 * (m / m0)^(k - 1) rtol = 1e-7      # stays on its isentrope
+            ns = nozzle_state(cs, u, :jet)
+            @test ns.thrust ≈ ns.mdot * c_eff(m) rtol = 1e-7
+            # Δv = ∫ c_eff dm/(m_dry + m) from m to m0 (Simpson, 2000 intervals)
+            n = 2000; h = (m0 - m) / n
+            fq(x) = c_eff(x) / (m_dry + x)
+            Δv = h / 3 * (fq(m) + fq(m0) + sum((isodd(j) ? 4 : 2) * fq(m + j * h) for j in 1:n-1))
+            @test force(cs, u, :tank, Momentum()) ≈ Δv rtol = 1e-6
+        end
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9 && cl.charge_rel <= 1e-10   # momentum included
+    end
+
+    # --- the bipropellant engine: H₂/O₂ gas, pump-fed, equilibrium chamber, frozen ideal nozzle ---
+    H2, O2, H2O = H2g(), O2g(), H2Og()
+    gH2, gO2, gH2O = MolarGas(H2), MolarGas(O2), MolarGas(H2O)
+    mdot_H2, mdot_O2 = 0.05, 0.25                                    # kg/s, O/F = 5 (fuel-rich)
+    T_in, p_in = 300.0, 200e5                                        # feed state (tank state in flight)
+    At, ε = 1.4e-4, 40.0
+    burn = MassAction(1e10)                                          # fast: an equilibrium chamber
+    mixc = IdealGasMixture(H2, O2, H2O)
+
+    "Independent hand calculation of the steady chamber: equilibrium, energy, choked flow."
+    function hand_chamber()
+        nH2 = mdot_H2 / molar_mass(H2); nO2 = mdot_O2 / molar_mass(O2)       # mol/s in
+        gs = (gH2, gO2, gH2O)
+        function resid(x)
+            T, p, ξ = x[1], x[2], x[3]
+            n = (nH2 - 2ξ, nO2 - ξ, 2ξ)
+            N = sum(n)
+            # delivered (pumped) state: isentropic from (T_in, p_in) to p
+            Tdel = (T_in * (p / p_in)^(R̄ / gH2.cp), T_in * (p / p_in)^(R̄ / gO2.cp))
+            Hin = nH2 * mh_(gH2, Tdel[1]) + nO2 * mh_(gO2, Tdel[2])
+            Hout = sum(n[j] * mh_(gs[j], T) for j in 1:3)
+            ΔG = 2mh_(gH2O, T) - 2mh_(gH2, T) - mh_(gO2, T) - T * (2ms_(gH2O, T, 101325.0) - 2ms_(gH2, T, 101325.0) - ms_(gO2, T, 101325.0))
+            x_ = n ./ N
+            lnQ = 2log(x_[3]) - 2log(x_[1]) - log(x_[2]) - log(p / 101325.0)
+            mtot = mdot_H2 + mdot_O2
+            cv_kg = sum(n[j] * gs[j].cv for j in 1:3) / mtot             # molar c_v × mol/s ÷ kg/s
+            Rk = N * R̄ / mtot
+            k = (cv_kg + Rk) / cv_kg
+            Γ = sqrt(k) * (2 / (k + 1))^((k + 1) / (2 * (k - 1)))
+            mchoke = At * p * Γ / sqrt(Rk * T)
+            return [(Hin - Hout) / (abs(Hin) + 1.0), lnQ + ΔG / (R̄ * T), mchoke / mtot - 1]
+        end
+        x = [3000.0, 50e5, 0.95 * nO2]
+        for _ in 1:100
+            r = resid(x)
+            J = ForwardDiff.jacobian(resid, x)
+            dx = -(J \ r)
+            # damped step keeping ξ inside (0, nO2)
+            λ = 1.0
+            while !(0 < x[3] + λ * dx[3] < min(nO2, nH2 / 2) && x[1] + λ * dx[1] > 0 && x[2] + λ * dx[2] > 0)
+                λ /= 2
+            end
+            x .+= λ .* dx
+            maximum(abs, r) < 1e-14 && break
+        end
+        T, p, ξ = x
+        n = (nH2 - 2ξ, nO2 - ξ, 2ξ)
+        mtot = mdot_H2 + mdot_O2
+        cv_kg = sum(n[j] * (gH2, gO2, gH2O)[j].cv for j in 1:3) / mtot
+        Rk = sum(n) * R̄ / mtot
+        return (; T, p, n, x = n ./ sum(n), k = (cv_kg + Rk) / cv_kg, R = Rk)
+    end
+
+    "Static-fire model: pumped boundary feeds, the chamber, the reaction, the nozzle on a stand."
+    function static_fire(; η = 1.0)
+        sys = ThermoSystem()
+        add!(sys, Body(:chamber, mixc; T = 3000.0, V = 2e-3, n = (H2 = 0.02, O2 = 0.002, H2O = 0.03)))
+        add!(sys, Reservoir(:stand, Momentum() => 0.0))
+        connect!(sys, FlowBoundary(IdealGasMixture(H2); T = T_in, p = p_in, mdot = t -> mdot_H2, supply = :pumped),
+                 :chamber; name = :inj_H2)
+        connect!(sys, FlowBoundary(IdealGasMixture(O2); T = T_in, p = p_in, mdot = t -> mdot_O2, supply = :pumped),
+                 :chamber; name = :inj_O2)
+        connect!(sys, Reaction(:H2 => -2, :O2 => -1, :H2O => 2; law = burn), :chamber; name = :combustion)
+        connect!(sys, Nozzle(At, ε; η), :chamber, :stand; name = :nozzle)
+        cs = compile(sys)
+        u = steady_state(cs; u0 = simulate(cs, (0.0, 0.5)).u[end])
+        return cs, u
+    end
+
+    hc = hand_chamber()
+    ref = ideal_nozzle(hc.T, hc.p, hc.k, hc.R, At, ε)
+
+    @testset "static fire: steady chamber and performance vs an independent hand calculation" begin
+        cs, u = static_fire()
+        @test temperature(cs, u, :chamber) ≈ hc.T rtol = 1e-7
+        @test pressure(cs, u, :chamber) ≈ hc.p rtol = 1e-7
+        n = moles(cs, u, :chamber); N = sum(values(n))
+        @test n.H2O / N ≈ hc.x[3] rtol = 1e-7
+        @test n.O2 / N ≈ hc.x[2] rtol = 1e-5                          # the small equilibrium residual
+        ns = nozzle_state(cs, u, :nozzle)
+        @test ns.mdot ≈ mdot_H2 + mdot_O2 rtol = 1e-9                   # steady: out = in
+        @test ns.M_e ≈ ref.Me rtol = 1e-8
+        @test ns.thrust ≈ ref.F rtol = 1e-7
+        du = rates(cs, u)
+        @test reservoir_charge(cs, du, :stand, Momentum()) ≈ ref.F rtol = 1e-7   # the load cell
+        C_F = ref.F / (hc.p * At); Isp = ref.F / (ns.mdot * g0)
+        @test ns.thrust / (pressure(cs, u, :chamber) * At) ≈ C_F rtol = 1e-7
+        @test ns.thrust / (ns.mdot * g0) ≈ Isp rtol = 1e-7
+        cstar = sqrt(hc.R * hc.T / hc.k) / ((2 / (hc.k + 1))^((hc.k + 1) / (2 * (hc.k - 1))))
+        @test pressure(cs, u, :chamber) * At / ns.mdot ≈ cstar rtol = 1e-7   # p_c = ṁ c*/A_t
+        # loss map. The chamber sits at chemical equilibrium (A ≈ 0), so the combustion
+        # irreversibility is booked where the cold propellants meet it: at the injectors, whose
+        # generation includes the jump from the feed's μ to the chamber's equilibrium μ (D-48).
+        # The reaction element carries almost nothing; the ideal nozzle exactly nothing.
+        S = entropy_production(cs, u)
+        @test S[:inj_H2] > 0
+        @test S[:inj_O2] > 0
+        @test S[:combustion] >= 0
+        @test S[:combustion] < 1e-6 * (S[:inj_H2] + S[:inj_O2])
+        @test S[:nozzle] == 0
+        # steady: total production = entropy out with the jet − entropy in with the feeds
+        jet, iH, iO = boundary_ledger(cs, du, :nozzle), boundary_ledger(cs, du, :inj_H2), boundary_ledger(cs, du, :inj_O2)
+        @test sum(values(S)) ≈ jet.S + iH.S + iO.S rtol = 1e-8           # feeds' S received is negative
+        r = energy_residual(cs, u)
+        @test abs(r.residual) <= 1e-10 * r.scale
+        # with a lossy nozzle: same chamber, generation ṁ c_p ln(T_e/T_es) (frozen, constant c_p)
+        cs2, u2 = static_fire(; η = 0.95)
+        ns2 = nozzle_state(cs2, u2, :nozzle)
+        @test temperature(cs2, u2, :chamber) ≈ hc.T rtol = 1e-7
+        cp = hc.k * hc.R / (hc.k - 1)
+        Te2 = ref.Te + 0.05 * (hc.T - ref.Te)
+        @test entropy_production(cs2, u2)[:nozzle] ≈ ns2.mdot * cp * log(Te2 / ref.Te) rtol = 1e-6
+        @test ns2.v_e ≈ sqrt(0.95) * ref.ve rtol = 1e-7
+    end
+
+    "Flight model: Moving tanks (one-species mixtures at the feed state) pumped into a Moving chamber
+    that starts at the steady static-fire state; rigid links; gravity on every body; vacuum."
+    function flight(u_static, cs_static; w0 = 0.0, gravity = true, m_dry = 50.0, mH2 = 3.0, mO2 = 15.0)
+        Ec = charges(cs_static, u_static, :chamber)
+        mixm = Moving(mixc)
+        sys = ThermoSystem()
+        add!(sys, Body(:chamber, mixm, vcat(Ec, (Ec[3] + Ec[4] + Ec[5]) * w0)))
+        add!(sys, Body(:tank_H2, Moving(IdealGasMixture(H2); m_dry); T = T_in, p = p_in, m = (H2 = mH2,), w = w0))
+        add!(sys, Body(:tank_O2, Moving(IdealGasMixture(O2)); T = T_in, p = p_in, m = (O2 = mO2,), w = w0))
+        connect!(sys, IdealPump(t -> mdot_H2), :tank_H2, :chamber; name = :pump_H2)
+        connect!(sys, IdealPump(t -> mdot_O2), :tank_O2, :chamber; name = :pump_O2)
+        connect!(sys, Transformer(1.0; a = Momentum(), b = Momentum()), :tank_H2, :chamber; name = :link_H2)
+        connect!(sys, Transformer(1.0; a = Momentum(), b = Momentum()), :tank_O2, :chamber; name = :link_O2)
+        connect!(sys, Reaction(:H2 => -2, :O2 => -1, :H2O => 2; law = burn), :chamber; name = :combustion)
+        connect!(sys, Nozzle(At, ε), :chamber; name = :nozzle)
+        if gravity
+            for b in (:chamber, :tank_H2, :tank_O2)
+                connect!(sys, GravityField(g0), b; name = Symbol(:g_, b))
+            end
+        end
+        return compile(sys)
+    end
+
+    @testset "flight: Beer & Johnston Sample Problem 14.9, v = u ln(m₀/(m₀ − qt)) − gt, and the altitude" begin
+        cs_s, u_s = static_fire()
+        u_ex = nozzle_state(cs_s, u_s, :nozzle).thrust / (mdot_H2 + mdot_O2)    # exhaust speed (c_eff, vacuum)
+        cs = flight(u_s, cs_s)
+        q = mdot_H2 + mdot_O2
+        m0 = 50.0 + 3.0 + 15.0 + sum(charges(cs_s, u_s, :chamber)[3:5])
+        ts = [2.0, 10.0, 20.0, 30.0]
+        sol = simulate(cs, (0.0, ts[end]); saveat = ts)
+        for (t, u) in zip(sol.t, sol.u)
+            # Beer & Johnston (Vector Mechanics, Dynamics) Sample Problem 14.9
+            v_exact = u_ex * log(m0 / (m0 - q * t)) - g0 * t
+            x_exact = u_ex * (t - (m0 - q * t) / q * log(m0 / (m0 - q * t))) - g0 * t^2 / 2
+            @test force(cs, u, :chamber, Momentum()) ≈ v_exact rtol = 1e-6
+            @test force(cs, u, :tank_O2, Momentum()) ≈ v_exact rtol = 1e-6            # rigidly linked
+            @test source_ledger(cs, u, :g_chamber).x ≈ x_exact rtol = 1e-6            # burnout altitude ∫ w dt
+            @test temperature(cs, u, :chamber) ≈ hc.T rtol = 1e-6                      # chamber stays steady
+            @test pressure(cs, u, :chamber) ≈ hc.p rtol = 1e-6
+        end
+        # momentum: bodies + jet + gravity fields received = 0 (the links conserve it)
+        pt(u) = sum(charges(cs, u, b)[end] for b in (:chamber, :tank_H2, :tank_O2)) +
+                boundary_ledger(cs, u, :nozzle).p + sum(source_ledger(cs, u, Symbol(:g_, b)).charge for b in (:chamber, :tank_H2, :tank_O2))
+        @test abs(pt(sol.u[end])) <= 1e-9 * q * u_ex * ts[end]
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9 && cl.charge_rel <= 1e-10
+        # Galilean invariance of the whole engine: started at 3 km/s, without gravity
+        csA, csB = flight(u_s, cs_s; gravity = false), flight(u_s, cs_s; gravity = false, w0 = 3000.0)
+        sA = simulate(csA, (0.0, 10.0); saveat = [10.0]); sB = simulate(csB, (0.0, 10.0); saveat = [10.0])
+        @test force(csB, sB.u[end], :chamber, Momentum()) - 3000.0 ≈ force(csA, sA.u[end], :chamber, Momentum()) rtol = 1e-7
+        @test temperature(csB, sB.u[end], :chamber) ≈ temperature(csA, sA.u[end], :chamber) rtol = 1e-9
+        @test nozzle_state(csB, sB.u[end], :nozzle).thrust ≈ nozzle_state(csA, sA.u[end], :nozzle).thrust rtol = 1e-9
+    end
+end

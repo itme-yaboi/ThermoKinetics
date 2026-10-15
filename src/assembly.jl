@@ -150,6 +150,8 @@ struct CompiledStream{D,N}
     fa::NTuple{N,Int}; fb::NTuple{N,Int}
     ca::NTuple{N,Int}; cb::NTuple{N,Int}
     ya::NTuple{N,Int}; yb::NTuple{N,Int}
+    wa::Int; wb::Int                # force index of w at each end (0: neither end moves)
+    cwa::Int; cwb::Int              # momentum charge targets
     led::Int                        # Ṡ_gen
 end
 
@@ -162,6 +164,7 @@ struct CompiledPump{F,M,N}
     fa::NTuple{N,Int}; fb::NTuple{N,Int}
     ca::NTuple{N,Int}; cb::NTuple{N,Int}
     ya::NTuple{N,Int}
+    wa::Int; wb::Int; cwa::Int; cwb::Int   # momentum rows (0: neither end moves)
     led::Int                        # Ṡ_gen, then external work
 end
 
@@ -183,6 +186,35 @@ struct CompiledOutlet{O,N}
     u::Int; pu::Int
     fu::NTuple{N,Int}; cu::NTuple{N,Int}
     led::Int                        # received m_1..m_N, S, U
+end
+
+"""
+An ideal nozzle on a chamber body (DESIGN §19.4): the chamber's material and charges (for its
+frozen-gas properties), its T, −p and μ force indices and species charge targets, and the
+momentum row: the chamber's own (moving) or a test stand's.
+"""
+struct CompiledNozzle{M,N,NE}
+    name::Symbol
+    A_t::Float64; ε::Float64; η::Float64
+    mat::M
+    u::Int; off::Int
+    fT::Int; pu::Int
+    fu::NTuple{N,Int}; cu::NTuple{N,Int}
+    stand::Int                      # node index of the test stand (0: the chamber moves)
+    fw::Int; cw::Int                # force index of w and momentum target (chamber's or stand's)
+    led::Int                        # Ṡ_gen, received m_1..m_N, S, U, momentum
+end
+
+"Gravity on a body: −g M with M = M_const + Σ u[ms] (the current mass of a `Moving` body)."
+struct CompiledGravity{NS}
+    name::Symbol
+    g::Float64
+    M_const::Float64
+    ms::NTuple{NS,Int}
+    node::Int
+    f::Int
+    c::Int
+    led::Int                        # momentum received, external work, displacement ∫ w dt
 end
 
 "An ideal converter: port forces P (from the buffer), fluxes F = W P into the port charge targets."
@@ -332,6 +364,7 @@ struct CompiledSystem
     converted::Vector{FormOfMotion}     # domains whose totals converters/transformers change
     reacting::Vector{FormOfMotion}      # species whose totals reactions change (elements are conserved)
     species_info::Dict{Symbol,SpeciesData}   # data of every species that has it, by name
+    mom_led::Dict{Symbol,Int}           # momentum carried out by each nozzle jet
     # per node (bodies then reservoirs)
     node_T::Vector{Int}                 # force index of T (0: no thermal DOF)
     node_S::Vector{Int}                 # du index receiving entropy (0: none)
@@ -400,7 +433,9 @@ _nledger(el::FlowBoundary) = 2 + length(mass_slots(el.material)) + 2
 _nledger(el::PassThroughOutlet, nspecies::Int) = nspecies + 2
 _nledger(::Converter) = 0
 _nledger(::Transformer) = 0
-_nledger(::Union{Source,GravityField}) = 2
+_nledger(::Source) = 2
+_nledger(::GravityField) = 3
+_nledger(el::Nozzle, nspecies::Int) = nspecies + 4
 _nledger(::Reaction) = 1
 _nledger(el::NuclearSource) = length(el.ν) + 2
 _nledger(::HeatSource) = 2
@@ -481,7 +516,8 @@ function compile(sys::ThermoSystem)
     elem_led = Dict{Symbol,UnitRange{Int}}()
     for e in elem_labels
         el = unwrap(g[e])
-        n = el isa PassThroughOutlet ? _nledger(el, length(species_of(node_index[port_node(sys, e, :a)]))) : _nledger(el)
+        n = el isa Union{PassThroughOutlet,Nozzle} ? _nledger(el, length(species_of(node_index[port_node(sys, e, :a)]))) :
+            _nledger(el)
         elem_led[e] = led:led+n-1
         led += n
     end
@@ -524,7 +560,9 @@ function compile(sys::ThermoSystem)
         elseif el isa Source
             Any[el.domain, :U]
         elseif el isa GravityField
-            Any[Momentum(), :U]
+            Any[Momentum(), :U, Displacement()]
+        elseif el isa Nozzle
+            vcat(Any[:S], Any[d for d in species_of(node_index[port_node(sys, e, :a)])], Any[:S, :U, Momentum()])
         elseif el isa Reaction
             Any[:S]
         elseif el isa NuclearSource
@@ -557,6 +595,7 @@ function compile(sys::ThermoSystem)
     converted = FormOfMotion[]
     reacting = FormOfMotion[]
     species_info = _species_info(slots)
+    mom_led = Dict{Symbol,Int}()
 
     function fluid_node(e, i, label)
         node = node_obj(i)
@@ -566,6 +605,24 @@ function compile(sys::ThermoSystem)
         isempty(species_of(i)) && throw(ArgumentError(":$e needs a fluid at :$label, which has no species (mass) charge"))
         node isa Reservoir && node.material === nothing &&
             throw(ArgumentError(":$e: reservoir :$label must carry a material (Reservoir(…; material = …)) to exchange fluid"))
+        return nothing
+    end
+    function not_moving(e, i, label, what)
+        force_index(i, Momentum()) == 0 ||
+            throw(ArgumentError("$what :$e is on :$label, which moves: it would book ½ṁw² as dissipation. " *
+                                "Use a Nozzle out of a moving body, and streams or pumps between moving bodies"))
+        return nothing
+    end
+    function momentum_rows(e, ia, ib, a, b)
+        wa, wb = force_index(ia, Momentum()), force_index(ib, Momentum())
+        (wa == 0) == (wb == 0) ||
+            throw(ArgumentError(":$e joins :$a and :$b, but only one of them moves: every body that exchanges mass " *
+                                "with a moving body must move with it (DESIGN §19.2)"))
+        return wa, wb, charge_target(ia, Momentum()), charge_target(ib, Momentum())
+    end
+    function species_subset(e, i, j, li, lj)
+        issubset(Set(species_of(i)), Set(species_of(j))) ||
+            throw(ArgumentError(":$e delivers $(species_of(i)) from :$li, but :$lj holds only $(species_of(j))"))
         return nothing
     end
     function same_species(e, i, j, li, lj)
@@ -612,7 +669,9 @@ function compile(sys::ThermoSystem)
         elseif el isa Union{Stream,IdealPump}
             a, b = port_node(sys, e, :a), port_node(sys, e, :b)
             ia, ib = node_index[a], node_index[b]
-            fluid_node(e, ia, a); fluid_node(e, ib, b); same_species(e, ia, ib, a, b)
+            fluid_node(e, ia, a); fluid_node(e, ib, b)
+            el isa Stream ? same_species(e, ia, ib, a, b) : species_subset(e, ia, ib, a, b)
+            wa, wb, cwa, cwb = momentum_rows(e, ia, ib, a, b)
             sp = species_of(ia)
             N = length(sp)
             fa, fb = ntuple(k -> force_index(ia, sp[k]), N), ntuple(k -> force_index(ib, sp[k]), N)
@@ -620,30 +679,32 @@ function compile(sys::ThermoSystem)
             ya = ntuple(k -> yindex(ia, sp[k]), N)
             if el isa Stream
                 c = CompiledStream(e, el.driver, ia, ib, force_index(ia, Volumetric()), force_index(ib, Volumetric()),
-                                   fa, fb, ca, cb, ya, ntuple(k -> yindex(ib, sp[k]), N), first(r))
+                                   fa, fb, ca, cb, ya, ntuple(k -> yindex(ib, sp[k]), N), wa, wb, cwa, cwb, first(r))
             else
                 N == 1 || throw(ArgumentError("ideal pump :$e: single-species fluids only (for now)"))
                 up = node_obj(ia)
-                mat = up isa Body ? up.material : up.material
-                c = CompiledPump(e, el.mdot, mat, ia, ib, force_index(ib, Volumetric()), fa, fb, ca, cb, ya, first(r))
+                mat = fluid_material(up.material)
+                c = CompiledPump(e, el.mdot, mat, ia, ib, force_index(ib, Volumetric()), fa, fb, ca, cb, ya,
+                                 wa, wb, cwa, cwb, first(r))
                 work_led[e] = first(r) + 1
             end
             push!(compiled, c)
             prod_led[e] = first(r):first(r)
             push!(touch, ([ia, ib], r))
-            push!(moves, ([ia, ib], collect(FormOfMotion, sp), false))
-            mark_active!(ca); mark_active!(cb); mark_active!((node_S[ia], node_S[ib]))
+            push!(moves, ([ia, ib], wa == 0 ? collect(FormOfMotion, sp) : vcat(FormOfMotion[Momentum()], sp), false))
+            mark_active!(ca); mark_active!(cb); mark_active!((node_S[ia], node_S[ib])); mark_active!((cwa, cwb))
         elseif el isa FlowBoundary
             d = port_node(sys, e, :a)
             id = node_index[d]
             id <= nb || throw(ArgumentError("flow boundary :$e must feed a body, not a reservoir"))
             fluid_node(e, id, d)
+            not_moving(e, id, d, "flow boundary")
             msp = [dd for dd in domains(el.material) if dd isa Species]
-            Set(msp) == Set(species_of(id)) ||
-                throw(ArgumentError("flow boundary :$e supplies $msp, but :$d holds $(species_of(id))"))
+            issubset(Set(msp), Set(species_of(id))) ||
+                throw(ArgumentError("flow boundary :$e supplies $msp, but :$d holds only $(species_of(id))"))
             N = length(msp)
             N == 1 || throw(ArgumentError("flow boundary :$e: single-species fluids only (for now)"))
-            E = charges_at(el.material; T = el.T, p = el.p, m = 1.0)
+            E = _unit_charges(el.material; T = el.T, p = el.p)
             F = forces(el.material, E)
             ms = mass_slots(el.material)
             mtot = sum(E[i] for i in ms)
@@ -666,6 +727,7 @@ function compile(sys::ThermoSystem)
             iu = node_index[uu]
             iu <= nb || throw(ArgumentError("outlet :$e must drain a body, not a reservoir"))
             fluid_node(e, iu, uu)
+            not_moving(e, iu, uu, "outlet")
             sp = species_of(iu)
             N = length(sp)
             c = CompiledOutlet(e, el, iu, force_index(iu, Volumetric()),
@@ -722,20 +784,67 @@ function compile(sys::ThermoSystem)
             i <= nb || throw(ArgumentError("source :$e must act on a body, not on :$nl"))
             d = el isa Source ? el.domain : Momentum()
             force_index(i, d) == 0 && throw(ArgumentError("source :$e supplies $d, but :$nl has no such form of motion"))
-            rate = if el isa GravityField
-                M = inertial_mass(node_obj(i).material)
-                M === nothing && throw(ArgumentError("gravity :$e needs a body with an inertial mass; :$nl has none"))
-                ConstRate(-el.g * M)
+            c = if el isa GravityField
+                mat = node_obj(i).material
+                if mat isa Moving                       # the current mass: m_dry plus the fluid
+                    ms = Tuple(body_offset[i] + k - 1 for k in mat.ms)
+                    CompiledGravity(e, el.g, mat.m_dry, ms, i, force_index(i, d), charge_target(i, d), first(r))
+                else
+                    M = inertial_mass(mat)
+                    M === nothing && throw(ArgumentError("gravity :$e needs a body with an inertial mass; :$nl has none"))
+                    CompiledGravity(e, el.g, Float64(M), (), i, force_index(i, d), charge_target(i, d), first(r))
+                end
             else
-                el.rate isa Real ? ConstRate(Float64(el.rate)) : el.rate
+                rate = el.rate isa Real ? ConstRate(Float64(el.rate)) : el.rate
+                CompiledSource(e, rate, i, force_index(i, d), charge_target(i, d), first(r))
             end
-            c = CompiledSource(e, rate, i, force_index(i, d), charge_target(i, d), first(r))
             push!(compiled, c)
             work_led[e] = first(r) + 1
             push!(ext_charges, (d, first(r)))
             push!(touch, ([i], r))
             push!(moves, ([i], FormOfMotion[d], true))
             mark_active!((c.c,))
+        elseif el isa Nozzle
+            cl = port_node(sys, e, :a)
+            ic = node_index[cl]
+            ic <= nb || throw(ArgumentError("nozzle :$e must drain a body, not a reservoir"))
+            fluid_node(e, ic, cl)
+            mat = slots[ic].body.material
+            frozen_gas(mat, slots[ic].body.E0)            # refuses a chamber that is not an ideal gas
+            sp = species_of(ic)
+            N = length(sp)
+            stand_label = _port_or_nothing(sys, e, :m)
+            if force_index(ic, Momentum()) != 0
+                stand_label === nothing ||
+                    throw(ArgumentError("nozzle :$e: the chamber :$cl moves, so it supplies the jet's momentum itself; remove the stand"))
+                is, fw, cw = 0, force_index(ic, Momentum()), charge_target(ic, Momentum())
+            else
+                stand_label === nothing &&
+                    throw(ArgumentError("nozzle :$e: the chamber :$cl does not move, so the jet's momentum needs a test stand: " *
+                                        "connect!(sys, nozzle, chamber, stand) with stand = Reservoir(:stand, Momentum() => 0.0)"))
+                is = node_index[stand_label]
+                nb < is <= nb + nr || throw(ArgumentError("nozzle :$e: the stand :$stand_label must be a reservoir"))
+                fw = force_index(is, Momentum())
+                fw == 0 && throw(ArgumentError("nozzle :$e: the stand :$stand_label needs a Momentum force"))
+                reservoirs[is-nb].fns[findfirst(==(Momentum()), reservoirs[is-nb].domains)] === nothing ||
+                    throw(ArgumentError("nozzle :$e: the stand's velocity must be constant"))
+                cw = charge_target(is, Momentum())
+            end
+            M = typeof(mat)
+            c = CompiledNozzle{M,N,ncharges(mat)}(e, el.A_t, el.ε, el.η, mat, ic, body_offset[ic],
+                                                  node_T[ic], force_index(ic, Volumetric()),
+                                                  ntuple(k -> force_index(ic, sp[k]), N), ntuple(k -> charge_target(ic, sp[k]), N),
+                                                  is, fw, cw, first(r))
+            push!(compiled, c)
+            prod_led[e] = first(r):first(r)
+            bound_led[e] = (m = first(r)+1:first(r)+N, S = first(r) + N + 1, U = first(r) + N + 2)
+            mom_led[e] = first(r) + N + 3
+            for k in 1:N; push!(ext_charges, (sp[k], first(r) + k)); end
+            push!(ext_charges, (Momentum(), first(r) + N + 3))
+            push!(touch, (is == 0 ? [ic] : [ic, is], r))
+            push!(moves, ([ic], collect(FormOfMotion, sp), true))
+            push!(moves, (is == 0 ? [ic] : [ic, is], FormOfMotion[Momentum()], true))
+            mark_active!(c.cu); mark_active!((node_S[ic],)); is == 0 && mark_active!((cw,))
         elseif el isa Union{Reaction,NuclearSource,HeatSource}
             nl = port_node(sys, e, :a)
             i = node_index[nl]
@@ -795,7 +904,7 @@ function compile(sys::ThermoSystem)
     return CompiledSystem(sys, body_groups, element_groups,
                           body_labels, Body[g[n] for n in body_labels], body_offset,
                           res_labels, reservoirs, res_force, res_fns, res_led,
-                          jun_labels, junctions, junction_slots, transformers, converted, reacting, species_info,
+                          jun_labels, junctions, junction_slots, transformers, converted, reacting, species_info, mom_led,
                           node_T, node_S, node_U,
                           elem_labels, element_ref, conductor_labels, prod_led, work_led, bound_led, ext_charges,
                           touch, moves, sort(collect(active_set)),
@@ -932,6 +1041,9 @@ function transfer(c::CompiledStream{D,N}, P, u, cs::CompiledSystem, t) where {D,
     Js = mdot * s_up
     Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)
     Dp = sum(ntuple(k -> (P[c.fa[k]] - P[c.fb[k]]) * J[k], Val(N)))
+    # momentum carried between moving bodies (DESIGN §19.3): its row adds ½ṁ(w_u − w_d)² to D
+    Jp = c.wa == 0 ? zero(Dp) : mdot * (fwd ? P[c.wa] : P[c.wb])
+    c.wa == 0 || (Dp += (P[c.wa] - P[c.wb]) * Jp)
     if fwd
         Q_a = -Ta * Js
         Q_b = Dp - Q_a
@@ -941,7 +1053,7 @@ function transfer(c::CompiledStream{D,N}, P, u, cs::CompiledSystem, t) where {D,
         Q_a = Dp - Q_b
         S_gen = (Dp + Js * (Ta - Tb)) / Ta
     end
-    return (; mdot, J, Js, D = Dp, Q_a, Q_b, T_a = Ta, T_b = Tb, S_gen, parts = (; total = S_gen))
+    return (; mdot, J, Js, J_p = Jp, D = Dp, Q_a, Q_b, T_a = Ta, T_b = Tb, S_gen, parts = (; total = S_gen))
 end
 
 """
@@ -954,14 +1066,19 @@ function transfer(c::CompiledPump{F,M,N}, P, u, cs::CompiledSystem, t) where {F,
     J = SVector{N}(ntuple(k -> mdot * y[k], Val(N)))
     Js = mdot * s_a
     Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)
-    st = isentropic_state(c.mat, s_a, -P[c.pb])
-    E_a = sum(ntuple(k -> P[c.fa[k]] * J[k], Val(N))) + Ta * Js
-    E_star = st.μ * mdot + st.T * Js
+    st = isentropic_state(c.mat, s_a, -P[c.pb])      # the fluid's internal state, frame-free
+    # between moving bodies: momentum ṁ w_a moves too, and the delivered μ is seen in b's frame
+    w_a = c.wa == 0 ? zero(Ta) : P[c.wa]
+    w_b = c.wb == 0 ? zero(Tb) : P[c.wb]
+    Jp = mdot * w_a
+    μ_del = st.μ - w_b^2 / 2
+    E_a = sum(ntuple(k -> P[c.fa[k]] * J[k], Val(N))) + Ta * Js + w_a * Jp
+    E_star = μ_del * mdot + st.T * Js + w_b * Jp
     W = E_star - E_a
     Q_a = -Ta * Js
-    Q_b = E_star - sum(ntuple(k -> P[c.fb[k]] * J[k], Val(N)))
-    S_gen = (sum(ntuple(k -> (st.μ - P[c.fb[k]]) * J[k], Val(N))) + Js * (st.T - Tb)) / Tb
-    return (; mdot, J, Js, W, Q_a, Q_b, T_a = Ta, T_b = Tb, T_star = st.T, S_gen, parts = (; total = S_gen))
+    Q_b = E_star - sum(ntuple(k -> P[c.fb[k]] * J[k], Val(N))) - w_b * Jp
+    S_gen = (sum(ntuple(k -> (μ_del - P[c.fb[k]]) * J[k], Val(N))) + Js * (st.T - Tb)) / Tb
+    return (; mdot, J, Js, J_p = Jp, W, Q_a, Q_b, T_a = Ta, T_b = Tb, T_star = st.T, S_gen, parts = (; total = S_gen))
 end
 
 """
@@ -1034,6 +1151,10 @@ function _apply!(du, P, u, c::Union{CompiledStream{D,N},CompiledPump{D,M,N}}, cs
     for k in 1:N
         _charge!(du, cs, c.a, c.ca[k], -tr.J[k], P[c.fa[k]])
         _charge!(du, cs, c.b, c.cb[k], tr.J[k], P[c.fb[k]])
+    end
+    if c.wa != 0
+        _charge!(du, cs, c.a, c.cwa, -tr.J_p, P[c.wa])
+        _charge!(du, cs, c.b, c.cwb, tr.J_p, P[c.wb])
     end
     _heat!(du, cs, c.a, tr.Q_a, tr.T_a)
     _heat!(du, cs, c.b, tr.Q_b, tr.T_b)
@@ -1234,11 +1355,20 @@ end
 
 # --- reactions, nuclear and heat sources (DESIGN §8.1) ------------------------------------------
 
-"Species data of every body's species, by name; one name must mean the same atoms and molar mass."
+"""
+Species data of every body's species, by name; one name must mean the same atoms and molar mass.
+A species held both by a material with species data and by one without (an `IdealGas`) is
+refused: their energy and entropy datums differ, so the μ they exchange would not be one force.
+"""
 function _species_info(slots)
     info = Dict{Symbol,SpeciesData}()
+    plain = Set{Symbol}()
     for s in slots
         mat = s.body.material
+        if trace_floor(mat) === nothing
+            foreach(d -> d isa Species && push!(plain, d.name), domains(mat))
+            continue
+        end
         for name in species_names(mat)
             sd = species_data(mat, name)
             sd === nothing && continue
@@ -1251,13 +1381,17 @@ function _species_info(slots)
             end
         end
     end
+    both = intersect(plain, keys(info))
+    isempty(both) ||
+        throw(ArgumentError("species $(collect(both)) is held both by a material with species data and by one without " *
+                            "(e.g. IdealGas): their datums differ. Use IdealGasMixture(SpeciesData) for every body holding it"))
     return info
 end
 
 _reaction_species(el::Reaction) = unique(first(p) for ν in el.ν for p in ν)
 
 function _species_of_body(mat, name::Symbol, e, nl)
-    mat isa SpeciesMaterial ||
+    trace_floor(mat) === nothing &&
         throw(ArgumentError(":$e needs species data (an IdealGasMixture or IdealSolution) at :$nl"))
     name in species_names(mat) || throw(ArgumentError(":$e uses species :$name, which :$nl does not hold"))
     return species_data(mat, name)
@@ -1301,7 +1435,7 @@ function _compile_reaction(e, el::Reaction, mat, nl, i, fT, cS, force_index, led
     c = ntuple(k -> force_index(i, Species(names[k])), NS)
     cm = [force_index(i, Species(s)) for s in species_names(mat)]
     return CompiledReaction(e, law, i, fT, cS, cV, c, ntuple(k -> sds[k].M, NS),
-                            SMatrix{NR,NS}(ν), SMatrix{NR,NS}(ord), cm, mat.trace, led)
+                            SMatrix{NR,NS}(ν), SMatrix{NR,NS}(ord), cm, trace_floor(mat), led)
 end
 
 function _compile_nuclear(e, el::NuclearSource, mat, nl, i, fT, cS, force_index, led)
@@ -1393,5 +1527,114 @@ function _apply!(du, P, u, c::CompiledHeat, cs, t)
     @inbounds du[c.cS] += tr.dS
     @inbounds du[c.led] -= tr.dS
     @inbounds du[c.led+1] -= tr.Q
+    return nothing
+end
+
+# --- rockets: the nozzle and gravity on moving bodies (DESIGN §19) ------------------------------
+
+"The node on port `role` of element `el`, or `nothing` if it has none."
+function _port_or_nothing(sys::ThermoSystem, el::Symbol, role::Symbol)
+    for nb in neighbor_labels(sys.graph, el)
+        sys.graph[el, nb].role == role && return nb
+    end
+    return nothing
+end
+
+"One kilogram of a boundary fluid at (T, p): a single-species `IdealGas` or `IdealGasMixture`."
+_unit_charges(mat::Material; T, p) = charges_at(mat; T, p, m = 1.0)
+function _unit_charges(mat::IdealGasMixture{1}; T, p)
+    return charges_at(mat; T, p, m = NamedTuple{mat.names}((1.0,)))
+end
+_unit_charges(mat::IdealGasMixture; T, p) =
+    throw(ArgumentError("a flow boundary supplies one species (for now); this mixture has $(length(mat.names))"))
+
+"""
+The supersonic root M > 1 of the area–Mach relation A/A* = ε for ratio of specific heats k:
+a safeguarded Newton on the Float64 values, then one Newton step in the input's number type,
+which carries the exact derivative (implicit function theorem) for automatic differentiation.
+"""
+function _supersonic_mach(ε::Float64, k)
+    g(M, k) = -log(M) + (k + 1) / (2 * (k - 1)) * log(2 / (k + 1) * (1 + (k - 1) / 2 * M^2)) - log(ε)
+    dg(M, k) = -1 / M + (k + 1) / 2 * M / (1 + (k - 1) / 2 * M^2)
+    kv = Float64(ForwardDiff.value(k))
+    lo, hi = 1.0, 2.0
+    while g(hi, kv) < 0                                         # bracket: g increases on M > 1
+        lo, hi = hi, 2hi
+        hi > 1e6 && error("area ratio $ε out of range")
+    end
+    M = hi
+    for _ in 1:200
+        Mn = M - g(M, kv) / dg(M, kv)
+        Mn = (lo < Mn < hi) ? Mn : (lo + hi) / 2               # keep the step inside the bracket
+        g(Mn, kv) > 0 ? (hi = Mn) : (lo = Mn)
+        done = abs(Mn - M) <= 4eps() * Mn
+        M = Mn
+        done && break
+    end
+    return M - g(M, k) / dg(M, k)                               # carries the derivatives in k
+end
+
+"""
+Nozzle transfer at chamber state: choked ṁ, the frozen isentropic exit (M_e, T_es, p_e), the
+exit velocity with efficiency η, the bundle removed from the chamber (species J, entropy J_s,
+momentum J_p), the generation and the jet energy E_jet = Σ P·J removed.
+"""
+function transfer(c::CompiledNozzle{M,N,NE}, P, u, cs::CompiledSystem, t) where {M,N,NE}
+    E = SVector{NE}(ntuple(k -> u[c.off+k-1], Val(NE)))
+    gas = frozen_gas(c.mat, E)
+    k, R, cp = gas.k, gas.R, gas.cp
+    Tc, pc = P[c.fT], -P[c.pu]
+    Γ = sqrt(k) * (2 / (k + 1))^((k + 1) / (2 * (k - 1)))
+    mdot = c.A_t * pc * Γ / sqrt(R * Tc)
+    M_e = _supersonic_mach(c.ε, k)
+    T_es = Tc / (1 + (k - 1) / 2 * M_e^2)
+    p_e = pc * (T_es / Tc)^(k / (k - 1))
+    v_e = sqrt(2 * c.η * cp * (Tc - T_es))
+    T_e = T_es + (1 - c.η) * (Tc - T_es)                         # ≥ T_es exactly
+    A_e = c.ε * c.A_t
+    J = SVector{N}(ntuple(j -> mdot * u[c.cu[j]] / gas.m, Val(N)))
+    s_c = u[cs.node_S[c.u]] / gas.m
+    Js = mdot * s_c
+    w = P[c.fw]
+    J_p = mdot * (w - v_e) - p_e * A_e
+    # s_e − s_c = c_p ln(T_e/T_es): the isentropic part cancels exactly, so this is ≥ 0 (= 0 for η = 1)
+    S_gen = c.η == 1 ? zero(mdot) : mdot * cp * log(T_e / T_es)
+    E_jet = sum(ntuple(j -> P[c.fu[j]] * J[j], Val(N))) + Tc * Js + w * J_p
+    return (; mdot, k, R, cp, M_e, T_e, T_es, p_e, v_e, A_e, J, Js, J_p, thrust = mdot * v_e + p_e * A_e,
+            s_c, S_gen, E_jet, w, T_c = Tc, p_c = pc, parts = (; total = S_gen))
+end
+
+function _apply!(du, P, u, c::CompiledNozzle{M,N}, cs, t) where {M,N}
+    tr = transfer(c, P, u, cs, t)
+    @inbounds for j in 1:N
+        du[c.cu[j]] -= tr.J[j]
+        du[c.led+j] += tr.J[j]                   # the jet carries it out of the model
+    end
+    @inbounds du[cs.node_S[c.u]] -= tr.Js
+    if c.stand == 0
+        @inbounds du[c.cw] -= tr.J_p             # the moving chamber gives the jet its momentum
+    else
+        _charge!(du, cs, c.stand, c.cw, -tr.J_p, P[c.fw])   # the stand does: its receipt is the thrust
+    end
+    @inbounds du[c.led] += tr.S_gen
+    @inbounds du[c.led+N+1] += tr.Js + tr.S_gen  # jet entropy ṁ s_e
+    @inbounds du[c.led+N+2] += tr.E_jet
+    @inbounds du[c.led+N+3] += tr.J_p
+    return nothing
+end
+
+"Gravity: −g M on the body's momentum, its work, and the displacement rate w."
+function transfer(c::CompiledGravity{NS}, P, u, cs::CompiledSystem, t) where {NS}
+    M = c.M_const + sum(ntuple(k -> u[c.ms[k]], Val(NS)); init = zero(eltype(u)))
+    J = -c.g * M
+    return (; J, W = P[c.f] * J, w = P[c.f], M)
+end
+
+function _apply!(du, P, u, c::CompiledGravity, cs, t)
+    tr = transfer(c, P, u, cs, t)
+    @inbounds du[c.c] += tr.J
+    @inbounds du[c.led] -= tr.J                  # received by the field (negative: it supplies)
+    @inbounds du[c.led+1] += tr.W                # external work supplied
+    @inbounds du[c.led+2] += tr.w                # ∫ w dt
     return nothing
 end

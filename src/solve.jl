@@ -137,8 +137,15 @@ function consistent_state(cs::CompiledSystem, u::AbstractVector; t::Real = 0.0)
         r .= view(du, alg)
         return nothing
     end
-    sol = SciMLBase.solve(NonlinearProblem(resid!, v[alg], cs), NewtonRaphson(); abstol = 1e-12)
-    SciMLBase.successful_retcode(sol) || error("could not initialize the algebraic unknowns: retcode $(sol.retcode)")
+    # tolerance relative to the residuals' own size: a transformer row is a force rate, which can be
+    # large (a light rocket chamber pushed by its thrust: ~1e5 m/s²), so a fixed 1e-12 sits below
+    # its round-off and Newton would stall
+    r0 = zeros(cs.nalg)
+    resid!(r0, v[alg], cs)
+    scale = max(maximum(abs, r0; init = 0.0), 1.0)
+    sol = SciMLBase.solve(NonlinearProblem(resid!, v[alg], cs), NewtonRaphson(); abstol = 1e-12 * scale)
+    (SciMLBase.successful_retcode(sol) || (all(isfinite, sol.resid) && maximum(abs, sol.resid) <= 1e-10 * scale)) ||
+        error("could not initialize the algebraic unknowns: retcode $(sol.retcode)")
     v[alg] .= sol.u
     return v
 end
@@ -506,26 +513,45 @@ pump_work(cs::CompiledSystem, v::AbstractVector) = Dict(n => v[i] for (n, i) in 
 
 What a `Source` or `GravityField` has received from the model (`charge`; negative when it
 supplies charge) and the external work `W` it has supplied, read from the ledger block of `v`.
-These are integrated values from a state and rates from a rate vector. For gravity, W = −ΔPE.
+These are integrated values from a state and rates from a rate vector. For gravity, W = −ΔPE,
+and `x` is the displacement ∫ w dt (the altitude gained, for a vertical axis).
 """
 function source_ledger(cs::CompiledSystem, v::AbstractVector, name::Symbol)
     c = _unwrap(_element(cs, name))
+    c isa CompiledGravity && return (; charge = v[c.led], W = v[c.led+1], x = v[c.led+2])
     c isa CompiledSource || throw(ArgumentError(":$name is not a source"))
     return (; charge = v[c.led], W = v[c.led+1])
 end
 
 """
-    boundary_ledger(cs, v, element) -> (; m, S, U, W)
+    nozzle_state(cs, u, nozzle; t = 0.0) -> NamedTuple
 
-What a flow boundary, outlet, heat source or nuclear source *received* (mass, entropy, energy;
-negative for a supplying one) and the external work it took in, read from the ledger block of
-`v`. For a heat source, −U is the heat supplied and −S the entropy Q̇/T it brought in.
+A `Nozzle` at state `u`: `mdot` [kg/s]; the frozen `k`, `R`, `cp`; exit Mach `M_e`, isentropic
+and actual exit temperatures `T_es`, `T_e`, exit pressure `p_e`, velocity `v_e`, area `A_e`;
+the momentum removed `J_p` = ṁ(w − v_e) − p_e A_e; the vacuum `thrust` ṁ v_e + p_e A_e; the
+chamber's specific entropy `s_c`, `T_c`, `p_c` and velocity `w`; the generation `S_gen`; and
+`E_jet`, the energy the jet carries out of the model per second.
+"""
+function nozzle_state(cs::CompiledSystem, u::AbstractVector, name::Symbol; t::Real = 0.0)
+    _unwrap(_element(cs, name)) isa CompiledNozzle || throw(ArgumentError(":$name is not a nozzle"))
+    tr = _eval(cs, u, name; t)
+    return Base.structdiff(tr, NamedTuple{(:J, :Js, :parts)})
+end
+
+"""
+    boundary_ledger(cs, v, element) -> (; m, S, U, W, p)
+
+What a flow boundary, outlet, nozzle, heat source or nuclear source *received* (mass, entropy,
+energy; negative for a supplying one), the external work it took in, and the momentum `p` a
+nozzle's jet carried out (0 otherwise), read from the ledger block of `v`. For a heat source,
+−U is the heat supplied and −S the entropy Q̇/T it brought in.
 """
 function boundary_ledger(cs::CompiledSystem, v::AbstractVector, name::Symbol)
     r = get(cs.bound_led, name, nothing)
-    r === nothing && throw(ArgumentError(":$name is not a flow boundary or outlet"))
+    r === nothing && throw(ArgumentError(":$name is not a flow boundary, outlet, nozzle or source"))
     W = haskey(cs.work_led, name) ? v[cs.work_led[name]] : zero(eltype(v))
-    return (; m = _ledger_total(v, r.m), S = v[r.S], U = v[r.U], W)
+    p = haskey(cs.mom_led, name) ? v[cs.mom_led[name]] : zero(eltype(v))
+    return (; m = _ledger_total(v, r.m), S = v[r.S], U = v[r.U], W, p)
 end
 
 """
@@ -655,7 +681,7 @@ function energy_residual(cs::CompiledSystem, u::AbstractVector)
     end
     for n in cs.element_names
         tr = _eval(cs, u, n)
-        for f in (:Q_a, :Q_b, :Q_h, :Q_d, :W, :E, :E_in, :Q)
+        for f in (:Q_a, :Q_b, :Q_h, :Q_d, :W, :E, :E_in, :Q, :E_jet)
             hasproperty(tr, f) && (scale += abs(getproperty(tr, f)))
         end
     end

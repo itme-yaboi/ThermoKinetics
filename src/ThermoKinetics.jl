@@ -14,7 +14,8 @@ conductors; kinetic forms of motion, ideal converters, junctions and transformer
 DAE), switched connections and time-varying reservoirs; elastic forms of motion (springs, the
 pendulum potential), spring branches, monotone friction laws, force and torque sources and gravity;
 ideal-gas mixtures and ideal solutions with formation data, reactions (affinity and mass-action
-laws), nuclear sources and heat sources.
+laws), nuclear sources and heat sources; moving variable-mass bodies, momentum-carrying streams
+and pumps, and an ideal nozzle (rockets).
 """
 module ThermoKinetics
 
@@ -31,6 +32,7 @@ using NonlinearSolve: NonlinearProblem, NewtonRaphson, TrustRegion
 include("domains.jl")
 include("materials.jl")
 include("species.jl")
+include("moving.jl")
 include("elements.jl")
 include("reactions.jl")
 include("system.jl")
@@ -46,14 +48,14 @@ export Material, ConstantCapacitySolid, IdealGas, ElasticVolume, LinearCapacitor
        LinearInductor, LinearSpring, TorsionSpring, PendulumPotential, Composite,
        domains, internal_energy, forces, eos_matrix, temperature, pressure, charges_at,
        capacity_matrix, is_stable, valid_state, mass_slots,
-       SpeciesData, IdealGasMixture, IdealSolution, molar_mass, nucleons, species_names, species_data
+       SpeciesData, IdealGasMixture, IdealSolution, molar_mass, nucleons, species_names, species_data, Moving
 # elements
 export Body, Reservoir, ThermalConductance, VolumeConductance, LinearConductance, Resistor, MassConductance,
        ThermoelectricConductance, KnudsenBarrier, OnsagerConductance, Conductor, Split, Into, InternalNode,
        HydraulicConductance, Stream, IdealPump, FlowBoundary, PassThroughOutlet,
        Junction, Converter, Gyrator, InductorBranch, Transformer, Switched,
        SpringBranch, TorsionBranch, QuadraticDrag, CoulombFriction, Source, GravityField,
-       Reaction, AffinityLaw, MassAction, NuclearSource, FirstOrder, HeatSource
+       Reaction, AffinityLaw, MassAction, NuclearSource, FirstOrder, HeatSource, Nozzle
 # basis transformations of Veinik's coefficient data
 export thermoelectric_from_veinik, barrier_mass_basis, electrokinetic_mass_basis
 # system
@@ -63,7 +65,7 @@ export initial_state, consistent_state, rates, simulate, steady_state
 # results and diagnostics
 export charges, force, set_temperature!, flux, heat_flow, entropy_production, entropy_production_parts,
        generated_entropy, reservoir_ledger, reservoir_charge, boundary_ledger, pump_work, source_ledger, mass_flow,
-       total_charge, total_energy, total_entropy, reaction_rates, element_totals,
+       total_charge, total_energy, total_entropy, reaction_rates, element_totals, nozzle_state,
        energy_residual, closure, algebraic_index, constraint_residual
 # spatial helpers
 export rod!

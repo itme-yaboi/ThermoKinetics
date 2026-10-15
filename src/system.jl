@@ -114,6 +114,24 @@ function connect!(sys::ThermoSystem, el::Union{FlowBoundary,PassThroughOutlet}, 
 end
 
 """
+    connect!(sys, nozzle, chamber; name) -> Symbol
+    connect!(sys, nozzle, chamber, stand; name) -> Symbol
+
+Attach a `Nozzle` to a chamber. A moving chamber supplies the jet's momentum itself; a
+stationary one needs a test stand (a `Momentum` reservoir at w = 0) on port `:m`.
+"""
+function connect!(sys::ThermoSystem, el::Nozzle, chamber::Symbol; name::Symbol = _default_name(sys, el))
+    _check_node(sys, chamber)
+    return _add_element!(sys, el, name, chamber => :a)
+end
+function connect!(sys::ThermoSystem, el::Nozzle, chamber::Symbol, stand::Symbol; name::Symbol = _default_name(sys, el))
+    _check_node(sys, chamber)
+    _check_node(sys, stand)
+    chamber == stand && throw(ArgumentError("the stand must differ from the chamber"))
+    return _add_element!(sys, el, name, chamber => :a, stand => :m)
+end
+
+"""
     connect!(sys, source, body; name) -> Symbol
 
 Attach a `Source`, `GravityField`, `HeatSource`, `NuclearSource` or `Reaction` to a body.

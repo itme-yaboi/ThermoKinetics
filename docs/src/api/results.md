@@ -20,6 +20,7 @@ total_energy
 total_entropy
 reaction_rates
 element_totals
+nozzle_state
 energy_residual
 closure
 algebraic_index

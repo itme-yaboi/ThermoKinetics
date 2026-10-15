@@ -620,6 +620,40 @@ struct PassThroughOutlet{F}
     end
 end
 
+"""
+    Nozzle(A_t, ε; η = 1.0)
+
+An ideal, choked, quasi-1-D nozzle from a gas chamber to outside the model (DESIGN §19.4, D-33):
+throat area A_t [m²], area ratio ε = A_e/A_t > 1, kinetic-energy efficiency η ∈ (0, 1]. With the
+chamber's frozen composition (k, R, c_p constant):
+- ṁ = A_t p_c √(k/(R T_c)) (2/(k+1))^((k+1)/(2(k−1))) (choked throat);
+- exit Mach M_e > 1 from the area–Mach relation; isentropic exit T_es, p_e;
+- v_e = √(2η c_p (T_c − T_es)), actual exit temperature T_e = T_c − v_e²/(2c_p).
+
+It removes the chamber's bundle (species at the chamber composition, entropy ṁ s_c) and the
+momentum J_p = ṁ(w − v_e) − p_e A_e, the stream thrust. The jet's mass, energy, entropy ṁ s_e
+and momentum are booked as leaving the model; the generation ṁ(s_e − s_c) ≥ 0 (zero for η = 1)
+is booked on the nozzle. Energy closes exactly: the energy removed is ṁ(h_e + (w − v_e)²/2) −
+w p_e A_e, the jet's energy across a moving exit plane.
+
+Connect it with `connect!(sys, nozzle, chamber)` when the chamber is `Moving`, or
+`connect!(sys, nozzle, chamber, stand)` on a test stand, where `stand` is a `Momentum`
+reservoir at w = 0: its momentum received is the thrust (a load cell). The flow is always
+treated as choked (valid while the back pressure is below the critical ratio); ambient pressure
+on the exit area is a `Gyrator(-A_e; a = Volumetric(), b = Momentum())` to an atmosphere.
+"""
+struct Nozzle
+    A_t::Float64
+    ε::Float64
+    η::Float64
+    function Nozzle(A_t::Real, ε::Real; η::Real = 1.0)
+        _check_positive(A_t, "throat area")
+        (ε > 1 && isfinite(ε)) || throw(ArgumentError("area ratio must be > 1 (a supersonic nozzle), got $ε"))
+        (0 < η <= 1) || throw(ArgumentError("nozzle efficiency must be in (0, 1], got $η"))
+        return new(Float64(A_t), Float64(ε), Float64(η))
+    end
+end
+
 outlet_flow(o::PassThroughOutlet{Nothing}, p, t) = o.κ * max(p - o.p_out, zero(p))
 outlet_flow(o::PassThroughOutlet, p, t) = _nonneg_flow(o.mdot(t), "outlet")
 

@@ -1,28 +1,29 @@
 # STATUS
 
-*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-15, after slice 7.*
+*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-15, after slice 8.*
 
 ## Where we are
 
 - **Repository:** the package is `ThermoKinetics` (D-38), on the private GitHub repository `itme-yaboi/ThermoKinetics` (`origin`). `docs/veinik/` and the Veinik section notes are local only and must never be committed (D-36, D-37).
-- **Phase:** build. DESIGN.md revision 2 is approved. Revision 3 is accepted: mechanics (DESIGN §18) is built; rockets (§19) are next.
-- **Done:** slices 1–7 and 7a. Slice 7 was reactions, nuclear and heat sources (D-39 to D-44, all accepted). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
-- **Next:** slice 8, rockets (DESIGN §19, D-33; accepted, D-47). Slice 7 supplies the gas mixture with formation enthalpies and the reaction element; the limits are in §19.6.
+- **Phase:** build. DESIGN.md revision 2 is approved. Revision 3 is accepted and built: mechanics (DESIGN §18) and rockets (§19).
+- **Done:** slices 1–8 and 7a. Slice 8 was rockets (D-33, D-47; deviations D-48, for review). Slice 7 was reactions, nuclear and heat sources (D-39 to D-44). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
+- **Awaiting review:** D-48 (the slice 8 deviations: where an equilibrium chamber books its losses, and pump-fed rather than pressure-fed feeds).
+- **Next:** to be agreed (DESIGN §15 item 9: E3/E4, the Clapeyron backend, vector momentum, …; or the plotting track).
 - **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
-- **Tests:** 192,953 checks pass in ~2.3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
+- **Tests:** 205,261 checks pass in ~3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
 ## What exists
 
 | Area | In `src/` | Notes |
 |---|---|---|
 | Domains | `Thermal`, `Volumetric` (−p), `Species`, `Electrical` (φ), `Momentum` (one axis, w), `AngularMomentum` (ω), `FluxLinkage` (i), `Displacement` (x, F), `Angle` (θ, M) | traits and default force tolerances |
-| Materials | `ConstantCapacitySolid`, `IdealGas`, `ElasticVolume`, `LinearCapacitor`, `InertialMass`, `RotationalInertia`, `LinearInductor`, `LinearSpring`, `TorsionSpring`, `PendulumPotential`, `Composite`; `IdealGasMixture`, `IdealSolution` from `SpeciesData` | U(E) closed form; AD forces and Hessian; `stiffness_floor` for non-convex U; `inertial_mass`; mixtures: formation data, molar masses from atoms, constant c_v, trace floor (D-41) |
+| Materials | `ConstantCapacitySolid`, `IdealGas`, `ElasticVolume`, `LinearCapacitor`, `InertialMass`, `RotationalInertia`, `LinearInductor`, `LinearSpring`, `TorsionSpring`, `PendulumPotential`, `Composite`; `IdealGasMixture`, `IdealSolution` from `SpeciesData` | U(E) closed form; AD forces and Hessian; `stiffness_floor` for non-convex U; `inertial_mass`; mixtures: formation data, molar masses from atoms, constant c_v, trace floor (D-41); `Moving(material; m_dry)` (variable-mass bodies, D-33) |
 | Nodes | `Body`; `Reservoir` (constant or time-varying forces `domain => t -> P(t)`, or a material); `Junction` (zero capacity, algebraic forces) | |
 | Conductors | `ThermalConductance`; `LinearConductance` (`VolumeConductance`, `Resistor`, `MassConductance`), `QuadraticDrag`, `CoulombFriction`, with `InternalNode` / `Split` / `Into`; coupled `ThermoelectricConductance`, `KnudsenBarrier`, `OnsagerConductance` | basis maps from Veinik's data; monotone laws are D ≥ 0 by type |
 | Converters | `Converter(W, domains)` (antisymmetric W), `Gyrator`, `InductorBranch`, `SpringBranch`, `TorsionBranch`; `Transformer` (index-reduced DAE, Baumgarte τ: gears, rack and pinion) | power-exact; converted totals are not conserved (by design) |
 | Sources | `Source(domain => rate)` (force, torque, current; constant or t -> rate); `GravityField(g)` (−Mg; special-purpose, flagged, D-34); `HeatSource(Q̇)`; `NuclearSource(ν; rate = FirstOrder(λ or half_life) or t -> ξ̇, E_dep, external)` | charge received and external work ledgered (`source_ledger`); heat and nuclear sources: energy, entropy and species received (`boundary_ledger`); nucleons and charge checked at compile; dU = E_dep ξ̇ |
 | Reactions | `Reaction(ν...; law)` or `Reaction([ν₁, ν₂]; law)` with `AffinityLaw(L)` (scalar or PSD matrix) or `MassAction(k0; b, Ea, orders)` | inside one body, dU = 0, A·ξ̇ ≥ 0 exactly; element balance checked at compile; `reaction_rates`, `element_totals` |
-| Flow | `Stream`, `IdealPump`, `FlowBoundary`, `PassThroughOutlet` | single species for pumps and boundaries |
+| Flow | `Stream`, `IdealPump`, `FlowBoundary`, `PassThroughOutlet`, `Nozzle` | single species for pumps and boundaries, which may feed a richer mixture; streams and pumps between `Moving` bodies carry momentum; `nozzle_state` |
 | Switching | `Switched(element; on = t -> Bool)` (also clutches and brakes) | discontinuities as `tstops`; evaluated as left limits |
 | Running | `simulate` (Rodas5P; mass-matrix DAE when junctions or transformers exist; `consistent_state`; inadmissible steps rejected, NaN on invalid trial stages; ledgers error-controlled by default with scaled tolerances, `atol_ledger` override); `steady_state` | tolerances: DESIGN §12.5 |
 | Results | as before, plus `algebraic_index`, `constraint_residual`, `source_ledger`, `reaction_rates`, `element_totals` | closure checks element totals when reactions act; per-species and per-element absolute drift (`closure(...).species`, `.elements`, D-43) |
@@ -39,6 +40,7 @@ Validation covered (`test/`):
   - E1 (Carnot: the deficit and Ṡ_gen fall tenfold for a tenfold G);
   - E2 (η = 1 − T₂/T₁ at the internal temperatures, exactly; Gouy–Stodola).
 - **08 §G:** G1–G9.
+- **Rockets (slice 8):** Moving material, momentum streams and pumps, nozzle kernel identities at random states, Galilean invariance, test stand, gravity on variable mass, Çengel Example 17-7.
 - **08 §H:** H1–H10 (isomerization, equilibrium by Gibbs minimization and entropy maximization, adiabatic combustion, calorimeter, Onsager-coupled reactions, tritium decay, Bateman chain, heat source, irradiated water, approach to zero); mixture and reaction kernel identities; A1/A3 and A → 0 on random reacting networks.
   - **Translational:**
     - mass–spring–damper (free and forced);
@@ -71,13 +73,16 @@ Validation covered (`test/`):
   - slab with internal heating (parabolic profile, second-order convergence);
   - water–gas shift equilibrium at 1000 K vs. Gibbs minimization, heat of reaction to the furnace;
   - tritium storage bed: inventory, decay heat to the wall, quasi-steady bed temperature;
-  - tritium generation in irradiated water (D(n,γ)T, then decay) vs. Bateman, to saturation.
+  - tritium generation in irradiated water (D(n,γ)T, then decay) vs. Bateman, to saturation;
+  - cold-gas thruster (isentropic blowdown, Δv by quadrature);
+  - bipropellant static fire vs. an independent hand calculation (T_c, p_c, composition, c*, C_F, I_sp, loss map);
+  - flight vs. Beer & Johnston Sample Problem 14.9 (velocity and altitude, with gravity).
 
 ## Known shortcuts and open items
 
 - **`GravityField`** is a special-purpose momentum source, flagged to revisit (D-34).
   - Revisit when hydrostatic or elevation heads (μ + gz in streams), altitude-dependent gravity, or height as a state are needed.
-  - It ledgers work only; the ∫ w dt ledger for variable mass is due in slice 8.
+  - It acts on the current mass of a `Moving` body and ledgers work and ∫ w dt (altitude).
 - **Mechanics limits** (DESIGN §18.7): one axis; no 3-D rigid-body rotation (Euler's equations); Coulomb friction regularized, with no true sticking; no lossy (mesh-efficiency) transformer; no linkages or contact.
 - **Mixtures and reactions** (DESIGN §8.1, D-41):
   - constant c_v per species, so high-temperature accuracy is limited (NASA polynomials come with the property backends);
@@ -101,7 +106,7 @@ Validation covered (`test/`):
   - temperature-dependent c_p (NASA polynomials);
   - radiation conductance;
   - two-phase flow;
-  - rockets (§19).
+  - a pressure-fed (stream) rocket feed (needs a check valve), a finite-rate or two-zone chamber, nozzle back-pressure checks.
 - **Steady state** of strongly coupled flow networks needs a transient warm start (D-26 §3).
 - **Tolerances:** linear invariants hold to round-off amplified by implicit-solve conditioning; "exact" zero-rate charges move by ~1 ulp (D-29 §8); stream production is ≥ 0 exactly only in exact arithmetic (D-26 §4).
 - **Network plotting** is designed (DESIGN §17, D-23, D-28), not built. All its reference PDFs are local only (D-30).

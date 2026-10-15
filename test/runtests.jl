@@ -3,6 +3,7 @@ using Test
 using Random
 using LinearAlgebra
 using StaticArrays
+using ForwardDiff
 
 include("helpers.jl")
 
@@ -21,5 +22,6 @@ include("helpers.jl")
     include("test_cycles.jl")         # slice 5: 08 §E Carnot cycles (E1, E2)
     include("test_mechanics.jl")      # slice 6: 08 §G G3, G4, G9; springs, friction laws, sources, gears
     include("test_reactions.jl")      # slice 7: 08 §H H1–H8, H10; mixtures, reactions, nuclear and heat sources
+    include("test_rockets.jl")        # slice 8: moving bodies, momentum streams, nozzle, gravity on variable mass
     include("test_applications.jl")   # DESIGN §0.1 application tests
 end

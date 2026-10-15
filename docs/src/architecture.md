@@ -24,7 +24,8 @@ Files are included in this order by `src/ThermoKinetics.jl`:
 | `domains.jl` | Forms of motion | [`FormOfMotion`](@ref) and its subtypes ([`Thermal`](@ref), [`Volumetric`](@ref), [`Species`](@ref), [`Electrical`](@ref), [`Momentum`](@ref), …): names, units, default force tolerances. No physics. |
 | `materials.jl` | State functions | [`Material`](@ref), [`forces`](@ref) and [`eos_matrix`](@ref) by automatic differentiation, the analytic materials ([`ConstantCapacitySolid`](@ref), [`IdealGas`](@ref), springs, inertias, …) and [`Composite`](@ref). |
 | `species.jl` | Multi-species materials | [`SpeciesData`](@ref) with the atomic-mass table, [`IdealGasMixture`](@ref), [`IdealSolution`](@ref), the trace floor (D-41). |
-| `elements.jl` | Nodes and laws | [`Body`](@ref), [`Reservoir`](@ref), [`Junction`](@ref); conductor laws and dissipation policies; streams, pumps, boundaries, outlets; converters, transformers; [`Source`](@ref), [`GravityField`](@ref), [`Switched`](@ref). Elements hold parameters only. |
+| `moving.jl` | Moving bodies | [`Moving`](@ref) (variable-mass bodies with momentum), frozen-gas properties and isentropic states for pumps and nozzles. |
+| `elements.jl` | Nodes and laws | [`Body`](@ref), [`Reservoir`](@ref), [`Junction`](@ref); conductor laws and dissipation policies; streams, pumps, boundaries, outlets, [`Nozzle`](@ref); converters, transformers; [`Source`](@ref), [`GravityField`](@ref), [`Switched`](@ref). Elements hold parameters only. |
 | `reactions.jl` | Internal transformations and sources | [`Reaction`](@ref) with [`AffinityLaw`](@ref) / [`MassAction`](@ref), [`NuclearSource`](@ref) with [`FirstOrder`](@ref), [`HeatSource`](@ref). |
 | `system.jl` | The model graph | [`ThermoSystem`](@ref) (a `MetaGraphsNext` bipartite graph), [`add!`](@ref), [`connect!`](@ref), port roles. |
 | `assembly.jl` | Compilation and the right-hand side | [`compile`](@ref) → [`CompiledSystem`](@ref); the compiled element structs; `transfer` and `_apply!` per element kind; the conductor kernels; `assemble!`; the Jacobian sparsity pattern. |
@@ -98,7 +99,8 @@ non-negotiables are enforced structurally rather than by care in each law.
 | `CompiledConductor` (kernels `ThermalRow`, `WeightsPolicy`, `NodePolicy`, `CoupledPolicy`) | [`Conductor`](@ref) with a law | the same J out of one port and into the other | heat deliveries sum to the released power exactly | Σ Q_i/T_i ≥ 0 (exact discrete kernels) |
 | `CompiledStream`, `CompiledPump`, `CompiledBoundary`, `CompiledOutlet` | [`Stream`](@ref), [`IdealPump`](@ref), [`FlowBoundary`](@ref), [`PassThroughOutlet`](@ref) | advected bundle, conserved | exact; pump and boundary work ledgered | advected entropy plus generation ≥ 0 |
 | `CompiledConverter`, `CompiledTransformer` | [`Converter`](@ref), [`Gyrator`](@ref), branches, [`Transformer`](@ref) | **not** conserved (the one exception) | Pᵀ W P ≡ 0, or λ(P_a − rP_b) on the constraint | none |
-| `CompiledSource` | [`Source`](@ref), [`GravityField`](@ref) | external, ledgered | external work ledgered | none |
+| `CompiledSource`, `CompiledGravity` | [`Source`](@ref), [`GravityField`](@ref) (on the current mass of a moving body) | external, ledgered | external work ledgered (and ∫ w dt for gravity) | none |
+| `CompiledNozzle` | [`Nozzle`](@ref) | the chamber's bundle and the momentum J_p leave the model, ledgered | exact: Σ P·J = the jet's energy across the moving exit plane | ṁ(s_e − s_c) ≥ 0, zero for η = 1 |
 | `CompiledReaction` | [`Reaction`](@ref) | per stoichiometry; elements conserved | dU = 0 inside the body | A·ξ̇/T ≥ 0, exact in floating point |
 | `CompiledNuclear` | [`NuclearSource`](@ref) | prescribed, ledgered per species | dU = E_dep ξ̇, external | boundary entropy, either sign |
 | `CompiledHeat` | [`HeatSource`](@ref) | none | Q̇, external | Q̇/T as boundary entropy |
@@ -188,7 +190,8 @@ species that reactions change. It also reports each species' and element's absol
 | `test_streams.jl`, `test_electrical.jl`, `test_coupled.jl` | streams and boundaries; circuits; coupled conductors |
 | `test_kinetic.jl`, `test_cycles.jl`, `test_mechanics.jl` | converters, DAEs and switching; Carnot cycles; mechanics |
 | `test_reactions.jl` | mixtures, reactions, nuclear and heat sources |
-| `test_applications.jl` | one application test per delivered use (walls, vessels, tanks, heat exchangers, circuits, mechanics, internal heating, equilibrium, tritium) |
+| `test_rockets.jl` | moving bodies, momentum streams and pumps, the nozzle, gravity on variable mass |
+| `test_applications.jl` | one application test per delivered use (walls, vessels, tanks, heat exchangers, circuits, mechanics, internal heating, equilibrium, tritium, rockets) |
 
 Every integration test also checks [`closure`](@ref).
 
