@@ -8,7 +8,7 @@
 - **Phase:** build. DESIGN.md revision 2 is approved. Revision 3 is accepted and built: mechanics (DESIGN §18) and rockets (§19).
 - **Done:** slices 1–9 and 7a. Slice 9 was cycles E3 (Veinik's rectangular cycle) and E4 (Otto) (D-49). Slice 8 was rockets (D-33, D-47, D-48). Slice 7 was reactions, nuclear and heat sources (D-39 to D-44). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
 - **Future work noted (D-48):** a finite-rate or two-zone rocket chamber, so the combustion loss is booked on the reaction rather than the injectors; a check valve for pressure-fed feeds.
-- **Next:** slice 10, the Clapeyron real-fluid backend (Rankine, Brayton); then the plotting track (DESIGN §15).
+- **Next:** slice 10a, the single-phase Clapeyron backend (scope proposed in DESIGN §2.5, D-50, for review); then 10b (two-phase, Rankine); then the plotting track.
 - **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
 - **Tests:** 205,827 checks pass in ~3.3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 

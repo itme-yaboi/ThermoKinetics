@@ -147,6 +147,36 @@ Real-fluid models are explicit in (T, ρ). **Clapeyron.jl is the first backend**
 7. **Two-phase** (water/steam, later): backends must provide an (s, v, x)-flash behind the same `forces` interface.
 8. **Isentropic state at a given pressure** (needed by the ideal pump, §7.2): solve p(s, v) = p_target for v at fixed s. This is a 1-D monotone root find (∂p/∂v|_s < 0); it is closed-form for the ideal gas.
 
+### 2.5 Slice 10a detail: the single-phase Clapeyron backend (proposed, 2026-10-15, D-50; not reviewed)
+
+**Packaging.** A package extension: Clapeyron is a weak dependency (`[weakdeps]`, `[extensions]` in `Project.toml`), the backend is `ext/ThermoKineticsClapeyronExt.jl`, and it loads when both packages are loaded (`using ThermoKinetics, Clapeyron`). The core declares the constructor `RealFluid` (and its docstring); the extension adds its methods and the material type. Tests and docs list Clapeyron, so the backend is always exercised.
+
+**The material.** `RealFluid(model; species)` wraps a Clapeyron model (any `EoSModel`: GERG-2008, a multiparameter single fluid, IAPWS-95, a cubic), with one `Species` name per component.
+- Charges (S, V, m₁ … m_n), domains (Thermal, Volumetric, Species…), one coupling group, as for `IdealGasMixture`; molar masses from the model.
+- Default models for the user's fluids (D-50): **helium** `GERG2008(["helium"])` (Clapeyron bundles no helium multiparameter equation), **CO₂** `SingleFluid("carbon dioxide")` (Span–Wagner), **water** `IAPWS95()`; and **air** as `GERG2008(["nitrogen", "oxygen", "argon"])` for textbook checks.
+- U(S, V, m) = A(T, V, n) + T S, with T from the inversion below and A = `Clapeyron.eos(model, V, T, n)` (the V-based Helmholtz energy; Clapeyron's p-based property functions are never used inside the material).
+
+**The inversion (§2.4 items 1–5, as designed).**
+- With the composition fixed, solve S(T; V, n) = S_target, S = −∂A/∂T, by safeguarded Newton on T (∂S/∂T|_V = C_v/T > 0), with a bisection fallback inside a bracket from the model's validity range, a per-body warm start, |ΔT| ≤ 4 eps·T.
+- Dual inputs: solve on the values, then carry the partials by the implicit-function theorem, T' = (S' − ∂S/∂V V' − ∂S/∂n n')/(∂S/∂T), so `forces` and `eos_matrix` are exact and AD never runs through the iterations.
+- Forces: T; −p = ∂A/∂V; μ_k = ∂A/∂m_k (per kg). The Hessian through the change of variables; A4 checks its symmetry before any symmetrizing.
+- `valid_state`: positive V and masses, and a state the inversion can solve in one phase. A state inside the two-phase dome is refused (slice 10b brings the flash), so integrators reject steps into it.
+- `isentropic_state` (§2.4 item 8) for pumps and turbines: solve p(s, v) = p_target for v at fixed s (1-D, ∂p/∂v|_s < 0), then T from the inversion.
+
+**Datums.** Each backend has its own reference state. A species held by two different backends in one model would exchange inconsistent μ, so `compile` refuses it (as it does for `IdealGas` vs species data, D-48).
+
+**Out of scope for 10a:** two-phase states and the flash (slice 10b), CoolProp, transport properties, mixture reactions with real fluids, the `Nozzle` on a real fluid (it uses frozen ideal-gas properties).
+
+**Tests (proposed).**
+- **Kernel:** at random single-phase states of each fluid, the material's T, p and μ equal Clapeyron's own (p, T)-based property functions at the state found by an independent `volume(model, p, T)` call; U is first-order homogeneous; the Hessian is symmetric before symmetrizing (A4) and positive definite at fixed mass; the IFT Jacobian matches central finite differences; Newton converges from a cold start and warm starts; states near the CO₂ critical point (pseudo-critical, large c_p) invert; a state in the dome is refused.
+- **Reference values:** water at single-phase states against Çengel's steam tables (A-4 to A-7, cited by table); helium density against the ideal gas (Z within 1e-3 at BoP conditions) and GERG; CO₂'s critical point (304.13 K, 7.3773 MPa) from the model.
+- **Isentropic state:** pump and turbine work on each fluid vs. Clapeyron's own isentropic route (p, s flash).
+- **Application tests:**
+  - **Çengel Example 9-6** (ideal Brayton, air with variable specific heats): T₂ = 540 K, T₄ = 770 K, back-work ratio 0.403, η = 0.426, within table precision;
+  - **a closed helium Brayton loop** (fusion balance of plant): compressor, heater, turbine, cooler as pumps and bodies, at steady state; η and net work vs. a hand calculation from Clapeyron state points; the loss map summing to the lost work;
+  - **a simple supercritical CO₂ Brayton cycle** near the critical point, the same way;
+  - **a superheated-steam expansion** in a turbine (single phase) vs. Çengel's tables.
+
 ## 3. Bodies and reservoirs
 
 ```julia
@@ -623,7 +653,8 @@ still sound.
    - E3, the switched cycle converter: charge falls P′ → P″ and lifts entropy; η = 1 − P″/P′ on the charge leg; ∮T dS = −∮P de; production → 0 (like 1/G) only with matched-force switching and a reservoir tracking the reversible path, and stays finite with fixed-temperature reservoirs; the reversed run lifts charge.
    - E4, the Otto cycle (application test): states, isentropic legs, η = 1 − r^(1−k) vs. Çengel Example 9-3 (cold-air standard), the rejection loss as the only producer.
    - Fixed: a reservoir force varying smoothly in t broke the Rosenbrock time derivative (the force buffer now takes t's number type).
-10. **Slice 10 — next: the Clapeyron real-fluid backend** with the Newton inversion (§2.4), for Rankine and Brayton. Scope and tests to be detailed at its start.
+10. **Slice 10a — next: the single-phase Clapeyron backend** (§2.4, §2.5; D-50): a package extension, `RealFluid`, the Newton inversion with IFT derivatives; Brayton cycles (helium, sCO₂, air). Scope proposed in §2.5.
+10b. **Slice 10b: two-phase pure fluids and Rankine** (§2.4 item 7): the (s, v)-flash for a single substance (a 1-D solve in T with the lever rule); Rankine cycles vs. Çengel's examples 10-1 to 10-3.
 11. **Then:** the plotting track (§17, to be refreshed for the element kinds of slices 6–8 first), and later (order to be agreed): two-phase flash, the momentum vector domain, inertance-driven streams, 3-D rigid-body rotation (§18.7), the D-48 future work.
 
 ## 16. Review record (revision 1 questions)
