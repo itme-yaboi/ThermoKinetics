@@ -228,6 +228,52 @@ struct CompiledSource{F}
     led::Int                        # charge received by the source (−rate), then external work supplied
 end
 
+"""
+Reactions inside one body (DESIGN §8.1): the body's T (force index), its entropy target, its
+volume slot (0: none), the species' charge slots (= force indices of μ), molar masses, the
+R × NS stoichiometry and, for mass action, the reaction orders.
+"""
+struct CompiledReaction{L,NS,NR,NN}
+    name::Symbol
+    law::L                          # AffinityLaw, or an NTuple of MassAction{Nothing}
+    node::Int
+    fT::Int
+    cS::Int
+    cV::Int
+    c::NTuple{NS,Int}
+    M::NTuple{NS,Float64}
+    ν::SMatrix{NR,NS,Float64,NN}
+    ord::SMatrix{NR,NS,Float64,NN}
+    cm::Vector{Int}                 # every species slot of the body (its total mass sets the trace floor)
+    trace::Float64
+    led::Int                        # Ṡ_gen
+end
+
+"A nuclear source in one body: first order in the parent (`kp > 0`, `rate` = λ(t)) or ξ̇ = rate(t)."
+struct CompiledNuclear{F,NS}
+    name::Symbol
+    rate::F
+    kp::Int
+    node::Int
+    fT::Int
+    cS::Int
+    c::NTuple{NS,Int}
+    M::NTuple{NS,Float64}
+    ν::NTuple{NS,Float64}
+    E_dep::Float64
+    led::Int                        # mass received per species, entropy received, energy received
+end
+
+"A heat source into a body: Q̇ = rate(t) at the body's temperature."
+struct CompiledHeat{F}
+    name::Symbol
+    rate::F
+    node::Int
+    fT::Int
+    cS::Int
+    led::Int                        # entropy received, energy received
+end
+
 "A gated element (D-14): applied only while `on(t)`."
 struct CompiledSwitched{C,F}
     name::Symbol
@@ -254,7 +300,10 @@ Flat lowering of a `ThermoSystem`. State layout: `u = [u_phys; u_alg; q_ledger]`
   *received* (negative: they supply);
 - outlets: mass of each species, entropy and energy received;
 - sources and gravity fields: the charge received (negative: they supply), then external work
-  supplied.
+  supplied;
+- reactions: production;
+- nuclear sources: the mass of each species, entropy and energy received (negative: supplied);
+- heat sources: entropy and energy received.
 
 Then, for each reservoir: the charge received in each of its domains (entropy for
 `Thermal`), then energy. Ledgers never feed back into the dynamics (D-10). Forces live in a
@@ -281,6 +330,8 @@ struct CompiledSystem
     junction_slots::Vector{Vector{Tuple{Int,Int}}}
     transformers::Vector{Any}
     converted::Vector{FormOfMotion}     # domains whose totals converters/transformers change
+    reacting::Vector{FormOfMotion}      # species whose totals reactions change (elements are conserved)
+    species_info::Dict{Symbol,SpeciesData}   # data of every species that has it, by name
     # per node (bodies then reservoirs)
     node_T::Vector{Int}                 # force index of T (0: no thermal DOF)
     node_S::Vector{Int}                 # du index receiving entropy (0: none)
@@ -346,6 +397,9 @@ _nledger(el::PassThroughOutlet, nspecies::Int) = nspecies + 2
 _nledger(::Converter) = 0
 _nledger(::Transformer) = 0
 _nledger(::Union{Source,GravityField}) = 2
+_nledger(::Reaction) = 1
+_nledger(el::NuclearSource) = length(el.ν) + 2
+_nledger(::HeatSource) = 2
 
 """
     compile(sys) -> CompiledSystem
@@ -467,6 +521,12 @@ function compile(sys::ThermoSystem)
             Any[el.domain, :U]
         elseif el isa GravityField
             Any[Momentum(), :U]
+        elseif el isa Reaction
+            Any[:S]
+        elseif el isa NuclearSource
+            vcat(Any[Species(first(p)) for p in el.ν], Any[:S, :U])
+        elseif el isa HeatSource
+            Any[:S, :U]
         else
             error("internal: no ledger kinds for $(typeof(el))")
         end
@@ -491,6 +551,8 @@ function compile(sys::ThermoSystem)
     mark_active!(targets) = foreach(t -> (0 < t <= nphys && push!(active_set, t)), targets)
     transformers = Any[]
     converted = FormOfMotion[]
+    reacting = FormOfMotion[]
+    species_info = _species_info(slots)
 
     function fluid_node(e, i, label)
         node = node_obj(i)
@@ -670,6 +732,38 @@ function compile(sys::ThermoSystem)
             push!(touch, ([i], r))
             push!(moves, ([i], FormOfMotion[d], true))
             mark_active!((c.c,))
+        elseif el isa Union{Reaction,NuclearSource,HeatSource}
+            nl = port_node(sys, e, :a)
+            i = node_index[nl]
+            what = el isa Reaction ? "reaction" : el isa NuclearSource ? "nuclear source" : "heat source"
+            i <= nb || throw(ArgumentError("$what :$e must act on a body, not on :$nl"))
+            node_T[i] == 0 && throw(ArgumentError("$what :$e needs a body with a thermal form of motion; :$nl has none"))
+            mat = slots[i].body.material
+            if el isa HeatSource
+                rate = el.Q isa Real ? ConstRate(Float64(el.Q)) : el.Q
+                c = CompiledHeat(e, rate, i, node_T[i], node_S[i], first(r))
+                bound_led[e] = (m = first(r):first(r)-1, S = first(r), U = first(r) + 1)
+                push!(touch, ([i], r))
+                push!(moves, ([i], FormOfMotion[], false))
+                mark_active!((c.cS,))
+            elseif el isa Reaction
+                c = _compile_reaction(e, el, mat, nl, i, node_T[i], node_S[i], force_index, first(r))
+                prod_led[e] = r
+                sp = FormOfMotion[Species(s) for s in _reaction_species(el)]
+                foreach(d -> d in reacting || push!(reacting, d), sp)
+                push!(touch, ([i], r))
+                push!(moves, ([i], sp, false))
+                mark_active!(c.c); mark_active!((c.cS,))
+            else
+                c = _compile_nuclear(e, el, mat, nl, i, node_T[i], node_S[i], force_index, first(r))
+                NS = length(el.ν)
+                bound_led[e] = (m = first(r):first(r)+NS-1, S = first(r) + NS, U = first(r) + NS + 1)
+                for (k, p) in enumerate(el.ν); push!(ext_charges, (Species(first(p)), first(r) + k - 1)); end
+                push!(touch, ([i], r))
+                push!(moves, ([i], FormOfMotion[Species(first(p)) for p in el.ν], true))
+                mark_active!(c.c); mark_active!((c.cS,))
+            end
+            push!(compiled, c)
         else
             error("unsupported element $(typeof(el))")
         end
@@ -697,7 +791,7 @@ function compile(sys::ThermoSystem)
     return CompiledSystem(sys, body_groups, element_groups,
                           body_labels, Body[g[n] for n in body_labels], body_offset,
                           res_labels, reservoirs, res_force, res_fns, res_led,
-                          jun_labels, junctions, junction_slots, transformers, converted,
+                          jun_labels, junctions, junction_slots, transformers, converted, reacting, species_info,
                           node_T, node_S, node_U,
                           elem_labels, element_ref, conductor_labels, prod_led, work_led, bound_led, ext_charges,
                           touch, moves, sort(collect(active_set)),
@@ -1132,4 +1226,168 @@ function jacobian_sparsity(cs::CompiledSystem)
         end
     end
     return sparse(I, J, ones(length(I)), n, n)
+end
+
+# --- reactions, nuclear and heat sources (DESIGN §8.1) ------------------------------------------
+
+"Species data of every body's species, by name; one name must mean the same atoms and molar mass."
+function _species_info(slots)
+    info = Dict{Symbol,SpeciesData}()
+    for s in slots
+        mat = s.body.material
+        for name in species_names(mat)
+            sd = species_data(mat, name)
+            sd === nothing && continue
+            if haskey(info, name)
+                old = info[name]
+                (Dict(pairs(old.atoms)) == Dict(pairs(sd.atoms)) && old.M == sd.M) ||
+                    throw(ArgumentError("species :$name has different atoms or molar mass in different bodies"))
+            else
+                info[name] = sd
+            end
+        end
+    end
+    return info
+end
+
+_reaction_species(el::Reaction) = unique(first(p) for ν in el.ν for p in ν)
+
+function _species_of_body(mat, name::Symbol, e, nl)
+    mat isa SpeciesMaterial ||
+        throw(ArgumentError(":$e needs species data (an IdealGasMixture or IdealSolution) at :$nl"))
+    name in species_names(mat) || throw(ArgumentError(":$e uses species :$name, which :$nl does not hold"))
+    return species_data(mat, name)
+end
+
+function _compile_reaction(e, el::Reaction, mat, nl, i, fT, cS, force_index, led)
+    names = _reaction_species(el)
+    sds = [_species_of_body(mat, s, e, nl) for s in names]
+    NS, NR = length(names), length(el.ν)
+    ν = zeros(NR, NS)
+    for (r, st) in enumerate(el.ν), (s, v) in st
+        ν[r, findfirst(==(s), names)] = v
+    end
+    atoms = unique(a for sd in sds for a in keys(sd.atoms))
+    for r in 1:NR, a in atoms                              # every element balances exactly
+        bal = sum(ν[r, k] * atom_count(sds[k], a) for k in 1:NS)
+        scale = sum(abs(ν[r, k]) * atom_count(sds[k], a) for k in 1:NS)
+        abs(bal) <= 1e-12 * scale ||
+            throw(ArgumentError("reaction $r of :$e does not conserve element :$a (balance $bal)"))
+    end
+    cV = force_index(i, Volumetric())
+    ord = zeros(NR, NS)
+    law = if el.law isa AffinityLaw
+        el.law
+    else
+        cV == 0 && throw(ArgumentError("mass action in :$e needs concentrations, so a body with a volume; " *
+                                       ":$nl has none (use AffinityLaw)"))
+        for (r, l) in enumerate(el.law)
+            if l.orders === nothing
+                for k in 1:NS; ord[r, k] = max(-ν[r, k], 0.0); end
+            else
+                for (s, o) in pairs(l.orders)
+                    k = findfirst(==(s), names)
+                    k === nothing && throw(ArgumentError("reaction order given for :$s, which :$e does not involve"))
+                    ord[r, k] = o
+                end
+            end
+        end
+        Tuple(MassAction(l.k0; b = l.b, Ea = l.Ea) for l in el.law)
+    end
+    c = ntuple(k -> force_index(i, Species(names[k])), NS)
+    cm = [force_index(i, Species(s)) for s in species_names(mat)]
+    return CompiledReaction(e, law, i, fT, cS, cV, c, ntuple(k -> sds[k].M, NS),
+                            SMatrix{NR,NS}(ν), SMatrix{NR,NS}(ord), cm, mat.trace, led)
+end
+
+function _compile_nuclear(e, el::NuclearSource, mat, nl, i, fT, cS, force_index, led)
+    names = [first(p) for p in el.ν]
+    sds = [_species_of_body(mat, s, e, nl) for s in names]
+    NS = length(names)
+    dA = sum(last(el.ν[k]) * sds[k].nucleons for k in 1:NS)
+    abs(dA - el.external.nucleons) <= 1e-9 * max(1, sum(abs(last(el.ν[k])) * sds[k].nucleons for k in 1:NS)) ||
+        throw(ArgumentError("nuclear source :$e does not conserve nucleons: Σ ν A = $dA, absorbed from outside $(el.external.nucleons)"))
+    dZ = sum(last(el.ν[k]) * sds[k].charge for k in 1:NS)
+    abs(dZ - el.external.charge) <= 1e-9 ||
+        throw(ArgumentError("nuclear source :$e does not conserve charge: Σ ν Z = $dZ, absorbed from outside $(el.external.charge)"))
+    kp = 0
+    rate = if el.rate isa FirstOrder
+        kp = findfirst(==(el.parent), names)
+        el.rate.λ isa Real ? ConstRate(Float64(el.rate.λ)) : el.rate.λ
+    else
+        el.rate
+    end
+    c = ntuple(k -> force_index(i, Species(names[k])), NS)
+    return CompiledNuclear(e, rate, kp, i, fT, cS, c, ntuple(k -> sds[k].M, NS), ntuple(k -> last(el.ν[k]), NS),
+                           el.E_dep, led)
+end
+
+"Reaction transfer: affinities A = −ν (M μ) [J/mol], extent rates ξ̇ [mol/s] and the production."
+function transfer(c::CompiledReaction{L,NS,NR}, P, u, cs::CompiledSystem, t) where {L,NS,NR}
+    T = P[c.fT]
+    μM = SVector{NS}(ntuple(k -> P[c.c[k]] * c.M[k], Val(NS)))
+    A = -(c.ν * μM)
+    ξ̇, S_gen = _extent_rates(c.law, c, A, T, u)
+    return (; ξ̇, A, T, S_gen, parts = (; total = S_gen))
+end
+
+function _extent_rates(law::AffinityLaw, c, A, T, u)
+    y = law.B' * (A / T)
+    return law.B * y, sum(abs2, y)                 # production ‖Bᵀ(A/T)‖² ≥ 0 exactly
+end
+
+function _extent_rates(laws::NTuple{NR,MassAction{Nothing}}, c::CompiledReaction{L,NS}, A, T, u) where {NR,L,NS}
+    V = u[c.cV]
+    δ = c.trace * sum(u[j] for j in c.cm)                   # the material's trace floor (D-41)
+    logn = ntuple(k -> _log_activity(u[c.c[k]] / c.M[k], δ / c.M[k]), Val(NS))
+    ξ̇ = SVector{NR}(ntuple(r -> _mass_action_rate(laws[r], A[r], T, V, logn, ntuple(k -> c.ord[r, k], Val(NS))), Val(NR)))
+    return ξ̇, sum(ntuple(r -> A[r] * ξ̇[r], Val(NR))) / T      # each term ≥ 0 exactly
+end
+
+function _apply!(du, P, u, c::CompiledReaction{L,NS,NR}, cs, t) where {L,NS,NR}
+    tr = transfer(c, P, u, cs, t)
+    dn = c.ν' * tr.ξ̇
+    @inbounds for k in 1:NS
+        du[c.c[k]] += c.M[k] * dn[k]
+    end
+    @inbounds du[c.cS] += tr.S_gen
+    @inbounds du[c.led] += tr.S_gen
+    return nothing
+end
+
+"Nuclear transfer: ξ̇, the transformation's affinity A, the deposited heat Q̇ = E_dep ξ̇ and dS = (Q̇ + Aξ̇)/T."
+function transfer(c::CompiledNuclear{F,NS}, P, u, cs::CompiledSystem, t) where {F,NS}
+    T = P[c.fT]
+    ξ̇ = c.kp > 0 ? c.rate(t) * u[c.c[c.kp]] / c.M[c.kp] : c.rate(t)
+    A = -sum(ntuple(k -> c.ν[k] * c.M[k] * P[c.c[k]], Val(NS)))
+    Q = c.E_dep * ξ̇
+    return (; ξ̇, A, T, Q, dS = (Q + A * ξ̇) / T)
+end
+
+function _apply!(du, P, u, c::CompiledNuclear{F,NS}, cs, t) where {F,NS}
+    tr = transfer(c, P, u, cs, t)
+    @inbounds for k in 1:NS
+        dm = c.ν[k] * c.M[k] * tr.ξ̇
+        du[c.c[k]] += dm
+        du[c.led+k-1] -= dm                   # received from the model (negative: supplied)
+    end
+    @inbounds du[c.cS] += tr.dS
+    @inbounds du[c.led+NS] -= tr.dS
+    @inbounds du[c.led+NS+1] -= tr.Q
+    return nothing
+end
+
+"Heat source transfer: Q̇ at the body's temperature."
+function transfer(c::CompiledHeat, P, u, cs::CompiledSystem, t)
+    Q = c.rate(t)
+    T = P[c.fT]
+    return (; Q, T, dS = Q / T)
+end
+
+function _apply!(du, P, u, c::CompiledHeat, cs, t)
+    tr = transfer(c, P, u, cs, t)
+    @inbounds du[c.cS] += tr.dS
+    @inbounds du[c.led] -= tr.dS
+    @inbounds du[c.led+1] -= tr.Q
+    return nothing
 end

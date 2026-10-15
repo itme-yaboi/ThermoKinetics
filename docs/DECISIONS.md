@@ -541,7 +541,7 @@ Each item lists what was built instead of the design text, and why.
 - **Alternatives:** keep `VeinikThermo.jl`; `GeneralizedThermo.jl`, `ThermoNetworks.jl`, `EntropyLedger.jl`, `ChargeForce.jl`.
 - **Why:** the user chose the repository name; Julia expects the repository `Name.jl` and the package `Name` to agree.
 
-### D-39 Slice 7 scope: mixture, reactions, nuclear and heat sources — proposed (2026-10-15; DESIGN §8.1–8.2; not reviewed)
+### D-39 Slice 7 scope: mixture, reactions, nuclear and heat sources — accepted (user, 2026-10-15, with D-40; DESIGN §8.1–8.2)
 Detail of D-11 for the slice. No new element kind: reactions are `InternalTransfer`, nuclear and heat sources are `SourceTransfer` (DESIGN §4.2).
 1. **Constant c_v per species, closed-form U.** Alternative: NASA polynomials now, which need the Newton inversion of §2.4. Deferred to the property backends; costs high-temperature accuracy in slice 8.
 2. **Molar masses derived from atoms** through a small atomic-mass table, so reactions conserve mass to round-off. Alternative: user-given M with a tolerance check, which leaks mass at data precision (non-negotiable 1).
@@ -551,6 +551,29 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 6. **`HeatSource` is a separate element.** Alternative: `Source(Thermal() => Q̇)`. Rejected: `Source` prescribes a charge rate, and a heat source prescribes an energy rate.
 7. **Validation cases H1–H8** go into `docs/veinik/08_validation_cases.md` §H only with the user's approval (D-34 precedent); until then they live in DESIGN §8.2.
 - **To review:** items 1–7, and whether the tritium storage bed is the right nuclear application test.
+
+### D-40 Review of the slice 7 scope — accepted (user, 2026-10-15)
+1. **Constant c_v:** accepted for now.
+2. **Trace amounts:** accepted, on the condition that a species approaching zero never makes a run fail. Made a requirement with its own test (H10).
+3. **Nuclear energy convention (dU = E_dep ξ̇):** accepted.
+4. **08 §H:** the user approved adding H1–H10 to `docs/veinik/08_validation_cases.md`.
+5. **Application tests:** the tritium storage bed, and, at the user's request, tritium generation in irradiated water (H9).
+   - H9 needs a liquid mixture, so slice 7 adds `IdealSolution`: a rigid condensed mixture with ideal mixing, closed-form U(S, m), no new element kind. Alternative: steam as an `IdealGasMixture` (wrong phase for a coolant).
+   - Atom symbols carry a nucleon number for the nuclear checks; element symbols use their main isotope's, isotopes their own.
+
+### D-41 Slice 7 implementation: deviations from DESIGN §8.1 — proposed for review (slice 7, 2026-10-15); supersedes "every species stays present" in D-39 §3 and D-40 §2
+1. **Trace floor in the mixing entropy** (the user's condition in D-40 §2: approaching zero must not fail).
+   - **Problem, measured:** with exact ideal mixing (n ln n, μ → −∞ as n → 0), a burnt-out reactant whose equilibrium amount is far below round-off sits in round-off noise (≈ 2 eps of the body's mass) at the edge of the valid states. In the H4 calorimeter, 40 % of steps came out slightly negative and were rejected, at any step size, and the run hit MaxIters.
+   - **Chosen:** below δ = `trace` × the body's total mass (default 1e-13, a material keyword), n ln n is continued by its second-order Taylor expansion at δ. U stays a convex, C², first-order homogeneous potential, μ is finite for every amount, and mass action uses the matching activity amounts, so A·ξ̇ ≥ 0 and the rate still vanishes at A = 0. The same calorimeter now runs 20 s in 276 steps.
+   - **Consequences:** species may start at zero. A depleted species settles at a small finite value that can read slightly negative (about −1e-12 of the body's mass in H3/H4). Species above the floor are exactly ideal. A trace species of real interest below 1e-13 of its body's mass needs a smaller `trace`.
+   - **Alternatives tried:** exact log with m > 0 (the stall above); tighter species tolerances (170,000 steps, more rejections: the noise is round-off, not tolerance); a log shift m + δ (moves the singularity, same stall); Rodas4P, whose stability function stays positive on decay (worse here). Not tried: log-mass states (a new state representation, a design change).
+   - **Found on the way:** Rodas5P's stability function is negative for hλ ≳ 6 on linear decay. That is harmless with the floor, but worth knowing for any charge that relaxes to a bound.
+2. **Closure scales.** Energy is measured against the energy moved, now including what is converted inside bodies (Σ|P·ΔE|, e.g. chemical to thermal); before, an adiabatic reactor had only the 1e-3·|U₀| floor and read integrator-level error (2e-9 of U) as 2e-6. A species is measured against the total mass of the bodies holding it; before, round-off from 1 kg of water read as 4e-9 drift on 1e-10 kg of HTO. Both make closure no stricter for existing tests.
+3. **Nucleon convention:** `compile` checks Σ ν_i A_i = external.nucleons (what is absorbed from outside), not "+ … = 0" as first written in §8.1.
+4. **Ledgers and accessors:** heat and nuclear sources are read with `boundary_ledger` (received: −U is the energy supplied). New `reaction_rates` and `element_totals`. `boundary_ledger` with no mass slots no longer fails on an empty sum.
+5. **Steady state:** a reaction does not anchor its species (closed reacting groups conserve element totals, the unimplemented constraint-row case, so `steady_state` refuses them). A nuclear source anchors its species, like a `Source`; a heat source anchors nothing.
+6. **Tests:** H10 runs H6 for 60 half-lives (not 20). At that depth the tritium amount is checked only for |n_T| ≤ 1e-10 n₀ (it is below the solver's absolute tolerance). 08 §H says 60 (user's file, edited with the §H approval).
+- **To review:** item 1 (the floor and its default) and item 2.
 
 ---
 

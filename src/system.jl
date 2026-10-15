@@ -116,9 +116,9 @@ end
 """
     connect!(sys, source, body; name) -> Symbol
 
-Attach a `Source` or a `GravityField` to a body.
+Attach a `Source`, `GravityField`, `HeatSource`, `NuclearSource` or `Reaction` to a body.
 """
-function connect!(sys::ThermoSystem, el::Union{Source,GravityField}, node::Symbol;
+function connect!(sys::ThermoSystem, el::Union{Source,GravityField,Reaction,NuclearSource,HeatSource}, node::Symbol;
                   name::Symbol = _default_name(sys, el))
     _check_node(sys, node)
     return _add_element!(sys, el, name, node => :a)

@@ -176,3 +176,58 @@ function _random_edge!(rng, sys, a, b)
         return (connect!(sys, Conductor(VolumeConductance(1e-9 + 9e-9rand(rng)); dissipation = legs), a, b), :piston)
     end
 end
+
+# --- slice 7: species data, mixtures, reactions ----------------------------------------------
+
+const R̄ = 8.314462618                 # J/(mol K)
+const N_AV = 6.02214076e23             # 1/mol
+const keV = 1.602176634e-16            # J
+const YEAR = 365.25 * 86400.0          # s
+
+"Ideal-gas species from molar data at 298.15 K (c_p, h_f, s°), with constant c_v = c_p − R̄."
+gasdata(name, atoms; cp, h_f = 0.0, s0 = 0.0) = SpeciesData(name; atoms, cv = cp - R̄, h_f, s0, basis = :molar)
+"Condensed species from molar data (constant specific heat c)."
+liqdata(name, atoms; c, h_f = 0.0, s0 = 0.0, kw...) = SpeciesData(name; atoms, cv = c, h_f, s0, basis = :molar, kw...)
+
+H2g() = gasdata(:H2, (H = 2,); cp = 28.836, s0 = 130.680)
+O2g() = gasdata(:O2, (O = 2,); cp = 29.376, s0 = 205.152)
+H2Og() = gasdata(:H2O, (H = 2, O = 1); cp = 33.588, h_f = -241826.0, s0 = 188.835)
+N2g() = gasdata(:N2, (N = 2,); cp = 29.124, s0 = 191.609)
+I2g() = gasdata(:I2, (I = 2,); cp = 36.888, h_f = 62421.0, s0 = 260.687)
+HIg() = gasdata(:HI, (H = 1, I = 1); cp = 29.158, h_f = 26500.0, s0 = 206.594)
+
+"Molar ideal-gas properties from species data (independent of the library's U): u, h, s at (T, p_i)."
+struct MolarGas
+    cv::Float64; cp::Float64; hf::Float64; s0::Float64
+end
+MolarGas(sd) = (M = molar_mass(sd); MolarGas(sd.cv * M, sd.cv * M + R̄, sd.h_f * M, sd.s0 * M))
+mu_(g::MolarGas, T) = g.hf - R̄ * 298.15 + g.cv * (T - 298.15)
+mh_(g::MolarGas, T) = g.hf + g.cp * (T - 298.15)
+ms_(g::MolarGas, T, p) = g.s0 + g.cp * log(T / 298.15) - R̄ * log(p / 101325.0)
+
+"Golden-section maximum of a unimodal f on [a, b]."
+function golden_max(f, a, b; tol = 1e-15)
+    φ = (sqrt(5) - 1) / 2
+    c, d = b - φ * (b - a), a + φ * (b - a)
+    fc, fd = f(c), f(d)
+    while abs(b - a) > tol * max(abs(a), abs(b), 1e-300)
+        if fc > fd
+            b, d, fd = d, c, fc
+            c = b - φ * (b - a); fc = f(c)
+        else
+            a, c, fc = c, d, fd
+            d = a + φ * (b - a); fd = f(d)
+        end
+    end
+    return (a + b) / 2
+end
+
+"Moles of each species of a mixture body (NamedTuple by species name)."
+function moles(cs, u, body)
+    i = findfirst(==(body), body_names(cs))
+    mat = cs.bodies[i].material
+    E = charges(cs, u, body)
+    names = species_names(mat)
+    off = length(E) - length(names)
+    return NamedTuple{names}(Tuple(E[off+k] / molar_mass(mat, names[k]) for k in eachindex(names)))
+end

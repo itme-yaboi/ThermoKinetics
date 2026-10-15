@@ -734,7 +734,7 @@ struct Source{D<:FormOfMotion,F}
     rate::F
     function Source(p::Pair{<:FormOfMotion})
         d, r = first(p), last(p)
-        d isa Thermal && throw(ArgumentError("a Source moves a non-thermal charge; heat sources are not built yet"))
+        d isa Thermal && throw(ArgumentError("a Source moves a non-thermal charge; for a prescribed heat rate use HeatSource(Q̇)"))
         r isa Real && !isfinite(r) && throw(ArgumentError("source rate must be finite, got $r"))
         return new{typeof(d),typeof(r)}(d, r)
     end

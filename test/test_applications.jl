@@ -447,3 +447,128 @@ end
         end
     end
 end
+
+@testset "applications: internal heating" begin
+    @testset "slab with uniform internal heating, convective faces: T(x) = T∞ + qL/(2h) + qx(L − x)/(2λ)" begin
+        L, A, λ, ρ, c, h, Tinf, q = 0.05, 1.0, 15.0, 8000.0, 500.0, 200.0, 300.0, 2e6    # q in W/m³
+        T_exact(x) = Tinf + q * L / (2h) + q * x * (L - x) / (2λ)
+        rise = T_exact(L / 2) - Tinf
+        err = Float64[]
+        for n in (10, 20, 40)
+            sys = ThermoSystem()
+            add!(sys, Reservoir(:coolant; T = Tinf))
+            rod = rod!(sys, :slab; n, L, area = A, λ, ρ, c, T0 = Tinf, left = (:coolant, h), right = (:coolant, h))
+            for cell in rod.cells
+                connect!(sys, HeatSource(q * A * rod.dx), cell)
+            end
+            cs = compile(sys)
+            u = steady_state(cs)
+            # the faces carry all the heat, q L A, half to each side
+            @test -heat_flow(cs, u, rod.left_face) ≈ q * L * A / 2 rtol = 1e-9
+            @test heat_flow(cs, u, rod.right_face) ≈ q * L * A / 2 rtol = 1e-9
+            push!(err, maximum(abs(temperature(cs, u, rod.cells[i]) - T_exact(rod.x[i])) for i in 1:n))
+        end
+        @test err[3] <= 1e-3 * rise
+        @test 3.5 <= err[1] / err[2] <= 4.5 && 3.5 <= err[2] / err[3] <= 4.5          # second order
+    end
+end
+
+@testset "applications: chemical and nuclear" begin
+    @testset "water–gas shift equilibrium at 1000 K vs Gibbs minimization" begin
+        CO = gasdata(:CO, (C = 1, O = 1); cp = 29.142, h_f = -110527.0, s0 = 197.660)
+        CO2 = gasdata(:CO2, (C = 1, O = 2); cp = 37.135, h_f = -393522.0, s0 = 213.795)
+        H2O, H2 = H2Og(), H2g()
+        mix = IdealGasMixture(CO, H2O, CO2, H2)
+        T, V = 1000.0, 1e-3
+        n0 = (CO = 0.010, H2O = 0.015, CO2 = 1e-12, H2 = 1e-12)
+        sys = ThermoSystem()
+        add!(sys, Body(:reactor, mix; T, V, n = n0))
+        add!(sys, Reservoir(:furnace; T))
+        connect!(sys, Conductor(ThermalConductance(0.5)), :reactor, :furnace)
+        connect!(sys, Reaction(:CO => -1, :H2O => -1, :CO2 => 1, :H2 => 1; law = MassAction(5.0)), :reactor; name = :shift)
+        cs = compile(sys)
+        sol = simulate(cs, (0.0, 300.0))
+        nf = moles(cs, sol.u[end], :reactor)
+        gs = MolarGas.((CO, H2O, CO2, H2))
+        n_of(ξ) = (n0.CO - ξ, n0.H2O - ξ, n0.CO2 + ξ, n0.H2 + ξ)
+        G(ξ) = (n = n_of(ξ); sum(n[k] * (mh_(gs[k], T) - T * ms_(gs[k], T, n[k] * R̄ * T / V)) for k in 1:4))
+        ξeq = golden_max(ξ -> -G(ξ), 0.0, n0.CO - 1e-18)
+        @test nf.CO2 ≈ n_of(ξeq)[3] rtol = 1e-6
+        @test nf.CO ≈ n_of(ξeq)[1] rtol = 1e-6
+        # the equilibrium constant from the same data, K = exp(−ΔG°/RT) (Δn = 0)
+        ΔG = sum(ν * (mh_(g, T) - T * ms_(g, T, 101325.0)) for (ν, g) in zip((-1, -1, 1, 1), gs))
+        @test (nf.CO2 * nf.H2) / (nf.CO * nf.H2O) ≈ exp(-ΔG / (R̄ * T)) rtol = 1e-6
+        # the heat of reaction went to the furnace
+        @test reservoir_ledger(cs, sol.u[end], :furnace).U ≈
+              sum(n0[k] * mu_(gs[k], T) for k in 1:4) - sum(nf[k] * mu_(gs[k], T) for k in 1:4) rtol = 1e-6
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9 && cl.charge_rel <= 1e-12
+    end
+
+    λT = log(2) / (12.32YEAR)
+    EdepT = 5.7 * keV * N_AV
+
+    @testset "tritium storage bed: inventory, decay heat to the wall, bed temperature" begin
+        host = liqdata(:ZrCo, (Zr = 1, Co = 1); c = 60.0)
+        Tb = liqdata(:T, (T = 1,); c = 25.0, h_f = -20e3)                       # tritium bound in the bed
+        He3b = liqdata(:He3, (He3 = 1,); c = 21.0)                                # helium trapped in the bed
+        bed = IdealSolution(host, Tb, He3b)
+        nT0 = 100e-3 / molar_mass(Tb)                                           # 100 g of tritium
+        G, Tw = 2.0, 300.0
+        sys = ThermoSystem()
+        add!(sys, Body(:bed, bed; T = Tw, n = (ZrCo = 10.0 / molar_mass(host), T = nT0, He3 = 1e-20)))
+        add!(sys, Reservoir(:wall; T = Tw))
+        connect!(sys, Conductor(ThermalConductance(G)), :bed, :wall; name = :mount)
+        connect!(sys, NuclearSource(:T => -1, :He3 => 1; rate = FirstOrder(λT), E_dep = EdepT), :bed; name = :decay)
+        cs = compile(sys)
+        ts = [0.25, 1.0, 5.0, 12.32] .* YEAR
+        sol = simulate(cs, (0.0, ts[end]); saveat = ts)
+        for (t, u) in zip(sol.t, sol.u)
+            nT = moles(cs, u, :bed).T
+            @test nT ≈ nT0 * exp(-λT * t) rtol = 1e-6
+            # quasi-steady (thermal time ≪ decay time): G(T − T_w) = ξ̇ (E_dep + u_T − u_He3)
+            Tbed = temperature(cs, u, :bed)
+            Δu = (Tb.h_f + Tb.cv * (Tbed - 298.15)) * molar_mass(Tb) - (He3b.h_f + He3b.cv * (Tbed - 298.15)) * molar_mass(He3b)
+            @test Tbed - Tw ≈ λT * nT * (EdepT + Δu) / G rtol = 1e-4
+            # the heat reaching the wall is the decay energy, less what the bed stored
+            @test reservoir_ledger(cs, u, :wall).U ≈ EdepT * (nT0 - nT) rtol = 1e-3
+        end
+        @test moles(cs, sol.u[end], :bed).T ≈ nT0 / 2 rtol = 1e-6                   # one half-life
+        @test 0.32 <= λT * nT0 * EdepT / 100 <= 0.33                                 # W per g at t = 0
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9 && cl.charge_rel <= 1e-11
+    end
+
+    @testset "tritium generation in irradiated water: D(n,γ)T to saturation" begin
+        wd(name, atoms) = liqdata(name, atoms; c = 75.385, h_f = -285830.0, s0 = 69.95)
+        water = IdealSolution(wd(:H2O, (H = 2, O = 1)), wd(:HDO, (H = 1, D = 1, O = 1)), wd(:HTO, (H = 1, T = 1, O = 1)),
+                              liqdata(:He3, (He3 = 1,); c = 20.786), liqdata(:OH, (O = 1, H = 1); c = 30.0))
+        nw = 1.0 / 18.015e-3                                                    # 1 kg of water
+        nD0 = 2 * 1.5576e-4 * nw                                                 # natural D/H, as HDO
+        σ, φ = 0.519e-31, 1e18                                                   # m², n/(m² s)
+        a = σ * φ
+        sys = ThermoSystem()
+        add!(sys, Body(:water, water; T = 300.0, n = (H2O = nw - nD0, HDO = nD0, HTO = 1e-20, He3 = 1e-20, OH = 1e-20)))
+        add!(sys, Reservoir(:loop; T = 300.0))
+        connect!(sys, Conductor(ThermalConductance(10.0)), :water, :loop)
+        connect!(sys, NuclearSource(:HDO => -1, :HTO => 1; rate = FirstOrder(a), external = (nucleons = 1, charge = 0)),
+                 :water; name = :capture)
+        connect!(sys, NuclearSource(:HTO => -1, :He3 => 1, :OH => 1; rate = FirstOrder(λT), E_dep = EdepT), :water; name = :decay)
+        cs = compile(sys)
+        ts = [1.0, 10.0, 50.0] .* YEAR
+        sol = simulate(cs, (0.0, ts[end]); saveat = ts)
+        for (t, u) in zip(sol.t, sol.u)
+            n = moles(cs, u, :water)
+            nHTO = nD0 * a * (exp(-a * t) - exp(-λT * t)) / (λT - a)                  # two-member Bateman
+            @test n.HTO ≈ nHTO rtol = 1e-6
+            @test n.HDO ≈ nD0 * exp(-a * t) rtol = 1e-9
+            @test n.He3 ≈ nD0 - n.HDO - n.HTO rtol = 1e-6
+        end
+        sat = a * nD0 / λT                                                        # saturation inventory
+        @test moles(cs, sol.u[end], :water).HTO / sat ≈ 1 - exp(-λT * 50YEAR) rtol = 1e-4
+        # after one year: inventory ≈ a nD0 t (decay still small)
+        @test moles(cs, sol.u[1], :water).HTO ≈ a * nD0 * YEAR rtol = 0.03
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9 && cl.charge_rel <= 1e-12
+    end
+end

@@ -476,7 +476,7 @@ function constraint_residual(cs::CompiledSystem, u::AbstractVector, name::Symbol
     return _eval(cs, u, name; t).g
 end
 
-_ledger_total(v, r::UnitRange{Int}) = sum(v[j] for j in r)
+_ledger_total(v, r::UnitRange{Int}) = sum((v[j] for j in r); init = zero(eltype(v)))
 
 "Entropy production rate [W/K] of every producing element at state `u`."
 function entropy_production(cs::CompiledSystem, u::AbstractVector; t::Real = 0.0)
@@ -517,8 +517,9 @@ end
 """
     boundary_ledger(cs, v, element) -> (; m, S, U, W)
 
-What a flow boundary or outlet *received* (mass, entropy, energy; negative for a supplying
-boundary) and the external work it took in, read from the ledger block of `v`.
+What a flow boundary, outlet, heat source or nuclear source *received* (mass, entropy, energy;
+negative for a supplying one) and the external work it took in, read from the ledger block of
+`v`. For a heat source, −U is the heat supplied and −S the entropy Q̇/T it brought in.
 """
 function boundary_ledger(cs::CompiledSystem, v::AbstractVector, name::Symbol)
     r = get(cs.bound_led, name, nothing)
@@ -568,6 +569,37 @@ function total_charge(cs::CompiledSystem, u::AbstractVector, d::FormOfMotion)
         dd == d && (s += u[i])
     end
     return s
+end
+
+"Element symbols of every species that carries species data."
+_elements(cs::CompiledSystem) = sort(unique(a for sd in values(cs.species_info) for a in keys(sd.atoms)))
+
+"""
+    element_totals(cs, v) -> Dict{Symbol,Float64}
+
+Amount [mol] of each element (and isotope symbol) over the bodies' species, plus what
+reservoirs, boundaries and nuclear sources received: Σ_s a_es m_s/M_s with m_s = `total_charge`.
+Reactions and transport conserve it; nuclear sources do too, through their species ledgers.
+Linear in `v`, so on a rate vector it gives the rates.
+"""
+function element_totals(cs::CompiledSystem, v::AbstractVector)
+    out = Dict{Symbol,Float64}()
+    for e in _elements(cs)
+        out[e] = sum((atom_count(sd, e) / sd.M * total_charge(cs, v, Species(s)) for (s, sd) in cs.species_info); init = 0.0)
+    end
+    return out
+end
+
+"""
+    reaction_rates(cs, u, reaction; t = 0.0) -> (; ξ̇, A, T, S_gen)
+
+Extent rates ξ̇ [mol/s], affinities A [J/mol] (one per reaction), the body temperature and
+the production A·ξ̇/T [W/K] of a `Reaction` element at state `u`.
+"""
+function reaction_rates(cs::CompiledSystem, u::AbstractVector, name::Symbol; t::Real = 0.0)
+    _unwrap(_element(cs, name)) isa CompiledReaction || throw(ArgumentError(":$name is not a reaction"))
+    tr = _eval(cs, u, name; t)
+    return (; tr.ξ̇, tr.A, tr.T, tr.S_gen)
 end
 
 "Total internal energy of the bodies [J]."
@@ -623,7 +655,7 @@ function energy_residual(cs::CompiledSystem, u::AbstractVector)
     end
     for n in cs.element_names
         tr = _eval(cs, u, n)
-        for f in (:Q_a, :Q_b, :Q_h, :Q_d, :W, :E, :E_in)
+        for f in (:Q_a, :Q_b, :Q_h, :Q_d, :W, :E, :E_in, :Q)
             hasproperty(tr, f) && (scale += abs(getproperty(tr, f)))
         end
     end
@@ -650,24 +682,46 @@ from the problem's initial state `sol.prob.u0`, whatever `saveat` kept, and ledg
 from their initial values.
 - energy: max |ΔU_bodies + Δ(energy received by reservoirs, boundaries, outlets) −
   Δ(external work)|, which sits at integrator tolerance. `energy_rel` divides by the
-  energy moved.
+  energy moved: through the connections, and converted inside the bodies (Σ|P·ΔE|, e.g.
+  chemical to thermal in a reaction).
 - entropy: max |ΔS_bodies + Δ(entropy received outside) − ΔS_gen|, which sits at round-off.
   `entropy_rel` divides by the entropy moved plus produced.
 - charge: per non-thermal domain, max |Δ total_charge|, which sits at round-off.
-  `charge_rel` is the largest, relative to the bodies' Σ|charge| (its maximum over the run).
+  `charge_rel` is the largest, relative to the bodies' Σ|charge| (its maximum over the run); for
+  a species, relative to the total mass of the bodies that hold it.
+  Species changed by reactions are not each conserved: their element totals are checked
+  instead (`element_totals`), in the same `charge_rel`.
 """
 function closure(cs::CompiledSystem, sol)
     u0 = sol.prob.u0
     U0 = [internal_energy(b.material, charges(cs, u0, b.name)) for b in cs.bodies]
+    E0b = [charges(cs, u0, b.name) for b in cs.bodies]
     S0 = total_entropy(cs, u0)
     X0, Y0 = _external_energy_terms(cs, u0), _external_entropy_terms(cs, u0)
     Sgen0 = sum(values(generated_entropy(cs, u0)); init = 0.0)
-    doms = [d for d in _nonthermal_domains(cs) if !(d in cs.converted)]   # converted totals are not conserved
+    # converted and reacting totals are not conserved; reacting species conserve their elements
+    doms = [d for d in _nonthermal_domains(cs) if !(d in cs.converted) && !(d in cs.reacting)]
+    elems = isempty(cs.reacting) ? Symbol[] : _elements(cs)
+    E0 = [element_totals(cs, u0)[e] for e in elems]
     Q0 = [total_charge(cs, u0, d) for d in doms]
     body_charge(u, d) = sum((abs(u[cs.body_offset[i]+k-1]) for (i, b) in enumerate(cs.bodies)
                              for (k, dd) in enumerate(domains(b.material)) if dd == d); init = 0.0)
-    # scale: the largest body total over the run (a tank filled from vacuum starts near zero)
-    Qscale = [max(maximum(body_charge(u, d) for u in sol.u), body_charge(u0, d), floatmin()) for d in doms]
+    # scale: the largest body total over the run (a tank filled from vacuum starts near zero). A
+    # species is measured against all the mass of the bodies holding it: round-off in the coupled
+    # solve scales with that, and a trace species (tritium in water) would otherwise read as drift.
+    function holding_mass(u, d)
+        s = 0.0
+        for (i, b) in enumerate(cs.bodies)
+            ds = domains(b.material)
+            d in ds || continue
+            s += sum((abs(u[cs.body_offset[i]+k-1]) for (k, dd) in enumerate(ds) if dd isa Species); init = 0.0)
+        end
+        return s
+    end
+    scale_of(u, d) = d isa Species ? holding_mass(u, d) : body_charge(u, d)
+    Qscale = [max(maximum(scale_of(u, d) for u in sol.u), scale_of(u0, d), floatmin()) for d in doms]
+    body_elem(u, e) = sum((atom_count(sd, e) / sd.M * body_charge(u, Species(s)) for (s, sd) in cs.species_info); init = 0.0)
+    Escale = [max(maximum(body_elem(u, e) for u in sol.u), floatmin()) for e in elems]
     eE = 0.0; eS = 0.0; movedE = 0.0; movedS = 0.0; eQ = 0.0
     for u in sol.u
         Ub = [internal_energy(b.material, charges(cs, u, b.name)) for b in cs.bodies]
@@ -678,10 +732,19 @@ function closure(cs::CompiledSystem, sol)
         dS = total_entropy(cs, u) - S0
         eE = max(eE, abs(sum(Ub; init = 0.0) - sum(U0; init = 0.0) + dX))
         eS = max(eS, abs(dS + dY - dSgen))
-        movedE = max(movedE, sum(abs.(Ub .- U0); init = 0.0) + sum(abs, dXt; init = 0.0))
+        # energy converted between forms inside the bodies (chemical to thermal in a reaction)
+        conv = sum((sum(abs.(forces(b.material, charges(cs, u, b.name)) .* (charges(cs, u, b.name) .- E0b[i])))
+                    for (i, b) in enumerate(cs.bodies)); init = 0.0)
+        movedE = max(movedE, sum(abs.(Ub .- U0); init = 0.0) + sum(abs, dXt; init = 0.0) + conv)
         movedS = max(movedS, abs(dS) + sum(abs, dYt; init = 0.0) + abs(dSgen))
         for (q, d) in enumerate(doms)
             eQ = max(eQ, abs(total_charge(cs, u, d) - Q0[q]) / Qscale[q])
+        end
+        if !isempty(elems)
+            el = element_totals(cs, u)
+            for (q, e) in enumerate(elems)
+                eQ = max(eQ, abs(el[e] - E0[q]) / Escale[q])
+            end
         end
     end
     # floors: when (almost) nothing moves, measure against the system's own magnitude
