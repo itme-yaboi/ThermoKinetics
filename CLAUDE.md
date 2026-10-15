@@ -45,11 +45,11 @@ DESIGN.md describes the target. STATUS.md and the code say what exists. When the
 
 ## How to work
 
-0. **Plan every task before starting it, and match the model to the work.** At the start of any task:
+0. **For significant tasks, plan first and match the model to the work.** A significant task is one with several distinct parts or real risk: a slice, a design change, a multi-file feature, a hard debugging session. Everything else (a single edit, a question, a doc tweak, a small fix) is done directly on the current model, with no planning step. For a significant task, at the start:
    - think it through first, then split it into work pieces (not the DESIGN §15 vertical slices): for example, read and summarize, write tests, implement a kernel, update docs, run and triage the suite;
    - for each piece, choose the most efficient model that can do it reliably. Use the strongest model (Opus, Fable) for design, physics derivations, numerical debugging and anything touching the non-negotiables. Use Sonnet for well-specified implementation and test writing. Use Haiku for mechanical work: searches, renames, doc formatting, running and summarizing tests;
    - run each piece on its chosen model, delegating to a subagent with that `model` when it differs from the current one. Give the subagent a self-contained brief: the files, the rule it must follow, and what "done" means;
-   - state the plan (pieces and models) to the user in a few lines before starting. A trivial task (one edit, one question) is a single piece; say so and do it directly;
+   - state the plan (pieces and models) to the user in a few lines before starting;
    - review every delegated result yourself before building on it or reporting it. Correctness and traceability still come first, so when in doubt about a piece, use the stronger model.
 1. **Design is approved** (DESIGN.md revision 2, reviewed 2026-10-14; of the revision 3 additions, mechanics §18 was accepted 2026-10-15, while rockets §19 are still proposed). Build in the vertical slices of DESIGN §15. Any change to the design itself (new element kinds, new state representation, a new kind of solver) goes into DESIGN.md and DECISIONS.md and is put to the user for review before it is built.
 2. **Tests first, alongside code.** For each slice, write its tests from `08_validation_cases.md` (§A invariants, then analytic cases B → C → D → E → G) before the code, then write code until they pass. Every integration test also checks `closure` (energy and entropy balance). When a slice delivers a use from DESIGN §0.1, add its **application test** to `test/test_applications.jl` and mark the row.
