@@ -1,0 +1,5 @@
+# Spatial helpers
+
+```@docs
+rod!
+```

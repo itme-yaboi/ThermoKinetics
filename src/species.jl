@@ -88,7 +88,20 @@ atom_count(sd::SpeciesData, sym::Symbol) = haskey(sd.atoms, sym) ? Int(sd.atoms[
 "Materials whose species carry `SpeciesData` (reactions and nuclear sources need it)."
 abstract type SpeciesMaterial <: Material end
 
+"""
+    species_names(mat) -> Tuple
+
+Species of a mixture material, in the order of its `Species` charges (empty for a material
+without species data).
+"""
 species_names(mat::SpeciesMaterial) = mat.names
+
+"""
+    species_data(mat, name) -> SpeciesData
+
+The `SpeciesData` of species `name` in a mixture material (`nothing` for a material without
+species data).
+"""
 function species_data(mat::SpeciesMaterial, name::Symbol)
     k = findfirst(==(name), mat.names)
     k === nothing && throw(ArgumentError("no species :$name in this material (it holds $(mat.names))"))

@@ -1,0 +1,9 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+ThermoKinetics = "63528d13-9ffc-4ed7-91a4-9af879b78066"
+
+[sources]
+ThermoKinetics = {path = ".."}
+
+[compat]
+Documenter = "1"

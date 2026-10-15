@@ -116,4 +116,9 @@ end
         connect!(sys5, Conductor(VolumeConductance(1e-9); dissipation = Split(0.0)), g2, hp)
         @test compile(sys5) isa CompiledSystem
     end
+
+    @testset "every exported name has a docstring (the HTML reference lists them all)" begin
+        undocumented = [n for n in names(ThermoKinetics) if n != :ThermoKinetics && !Base.Docs.hasdoc(ThermoKinetics, n)]
+        @test isempty(undocumented)
+    end
 end

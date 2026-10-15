@@ -6,10 +6,10 @@
 
 - **Repository:** the package is `ThermoKinetics` (D-38), on the private GitHub repository `itme-yaboi/ThermoKinetics` (`origin`). `docs/veinik/` and the Veinik section notes are local only and must never be committed (D-36, D-37).
 - **Phase:** build. DESIGN.md revision 2 is approved. Of the revision 3 additions, mechanics (DESIGN §18) is accepted and built; rockets (§19) are still proposed.
-- **Done:** slices 1–7. Slice 7 was reactions, nuclear and heat sources (D-39 to D-43, all accepted). The plotting design (DESIGN §17) is written but not built.
+- **Done:** slices 1–7 and 7a. Slice 7 was reactions, nuclear and heat sources (D-39 to D-44, all accepted). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
 - **Next:** slice 8, rockets (DESIGN §19, D-33; proposed, not reviewed). Slice 7 supplies the gas mixture with formation enthalpies and the reaction element; the limits are in §19.6.
 - **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
-- **Tests:** 192,952 checks pass in ~2.3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
+- **Tests:** 192,953 checks pass in ~2.3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
 ## What exists
 
@@ -27,6 +27,7 @@
 | Running | `simulate` (Rodas5P; mass-matrix DAE when junctions or transformers exist; `consistent_state`; inadmissible steps rejected, NaN on invalid trial stages; ledgers error-controlled by default with scaled tolerances, `atol_ledger` override); `steady_state` | tolerances: DESIGN §12.5 |
 | Results | as before, plus `algebraic_index`, `constraint_residual`, `source_ledger`, `reaction_rates`, `element_totals` | closure checks element totals when reactions act; per-species and per-element absolute drift (`closure(...).species`, `.elements`, D-43) |
 | Spatial | `rod!` | |
+| Documentation | `docs/make.jl`, `docs/src/` (Documenter; local HTML in `docs/build/`) | every export documented (build check and test); architecture page in `docs/src/architecture.md` |
 
 Validation covered (`test/`):
 - **Kernel identities**, all element kinds (spring branches Pᵀ W P = 0; friction laws D ≥ 0 and odd).

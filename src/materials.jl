@@ -3,6 +3,14 @@
 # Maxwell symmetry hold by construction. Coupling groups are expressed by composition
 # (`Composite`), never by flags.
 
+"""
+    Material
+
+Supertype of every material. A material is one state function U(E) of its charges, with
+`domains(mat)` giving their forms of motion in order and `internal_energy(mat, E)` the
+potential. Forces (`forces`) and the equation-of-state matrix (`eos_matrix`) follow from U by
+automatic differentiation. Optional: `valid_state`, `charges_at`, `stiffness_floor`.
+"""
 abstract type Material end
 
 """

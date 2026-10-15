@@ -611,6 +611,10 @@ still sound.
    - Added `SpeciesData` (atomic table, molar masses from atoms), `IdealGasMixture` and `IdealSolution` with formation data and the trace floor, `Reaction` with `AffinityLaw` (Onsager-coupled) and `MassAction` (sign-exact), `NuclearSource` with `FirstOrder`, `HeatSource`; `reaction_rates`, `element_totals`; closure on element totals.
    - Tests: 08 §H H1–H10, mixture and reaction kernel identities, a random reacting-network A1/A3 test with A → 0; application tests for internal heating, water–gas shift, the tritium storage bed and tritium in irradiated water.
    - Slice 8 has what it needs: the gas mixture with formation enthalpies and the reaction element (constant c_v, so high-temperature accuracy is limited).
+7a. **Slice 7a — ✅ done 2026-10-15** (D-45): HTML documentation (an intermediate slice, at the user's request).
+   - Documenter.jl in its own environment (`docs/Project.toml`, `docs/make.jl`, pages in `docs/src/`; the built site `docs/build/` is git-ignored and local only).
+   - Pages: home, getting started (three examples that run during the build), architecture and structure, an API reference covering every export, and the project records (DESIGN, STATUS, DECISIONS copied in at build time, with local-file links made plain text; `docs/veinik/` is never included).
+   - Every export has a docstring, checked by the build (`checkdocs = :exports`) and by a test.
 8. **Slice 8 — proposed (revision 3, not reviewed): rockets** (§19, D-33). It adds `Moving`, momentum-carrying streams and pumps, `Nozzle`, and a displacement (∫ w dt) ledger on `GravityField` for variable-mass bodies. Tests are in §19.5. It needs slices 6 and 7.
 9. **Later** (order to be agreed with the user): E3 (rectangular cycle; switching and time-varying reservoirs already exist), E4 (Otto), the Clapeyron backend with Newton inversion, two-phase flash, the momentum vector domain, inertance-driven streams, 3-D rigid-body rotation (§18.7).
 

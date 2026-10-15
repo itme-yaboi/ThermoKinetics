@@ -607,6 +607,13 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 - **What to do:** for discharge-level or environmental tritium, or any trace species whose transport matters near or below 1e-13, lower `trace` on that body to ~1e-15 (not lower: round-off), or model the dilute species in its own smaller body. Read slightly negative amounts as zero.
 - **Alternatives:** lower the default now (cost: robustness margin over round-off shrinks for every model); leave it implicit in D-42 (easy to miss).
 
+### D-45 HTML documentation with Documenter.jl, in `docs/` — accepted (user, 2026-10-15; layout left to Claude); slice 7a
+- **Chosen:** the standard Julia layout inside the existing `docs/` folder: `docs/Project.toml` (Documenter plus the package, its own environment, so the package gains no dependency), `docs/make.jl`, pages in `docs/src/`. Build: `julia --project=docs docs/make.jl`; open `docs/build/index.html`. The build is strict (no `warnonly`), runs the getting-started examples, and fails if an export is missing from the reference (`checkdocs = :exports`).
+- **Project records:** DESIGN, STATUS and DECISIONS are copied into `docs/src/project/` at build time (git-ignored), with local-file links made plain text. `docs/veinik/` and `_reference/` are never read or included.
+- **Not deployed:** the repository is private, so there is no `deploydocs` and no `gh-pages` branch; `docs/build/` is git-ignored.
+- **Alternatives:** a separate `human_docs/` folder (non-standard, tooling expects `docs/`); a docs branch (only useful for GitHub Pages deployment); hand-written HTML (no docstring extraction, drifts from the code).
+- **Built with:** the Documenter setup, API pages and examples by a Sonnet subagent, reviewed and corrected (an example compared a production rate with an integrated value; misfiled API entries); the architecture page and the missing docstrings directly.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

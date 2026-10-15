@@ -1,0 +1,5 @@
+# Switching
+
+```@docs
+Switched
+```

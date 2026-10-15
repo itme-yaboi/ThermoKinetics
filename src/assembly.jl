@@ -363,9 +363,13 @@ nnodes(cs::CompiledSystem) = length(cs.body_names) + length(cs.reservoir_names) 
 "Number of solver unknowns that are not ledgers: bodies' charges plus algebraic unknowns."
 nstate(cs::CompiledSystem) = cs.nphys + cs.nalg
 
+"Labels of the bodies of a compiled system, in state order."
 body_names(cs::CompiledSystem) = copy(cs.body_names)
+"Labels of the reservoirs of a compiled system."
 reservoir_names(cs::CompiledSystem) = copy(cs.reservoir_names)
+"Labels of the conductors of a compiled system."
 conductor_names(cs::CompiledSystem) = copy(cs.conductor_names)
+"Labels of every element (conductors, streams, converters, sources, reactions, …), in insertion order."
 element_names(cs::CompiledSystem) = copy(cs.element_names)
 
 """

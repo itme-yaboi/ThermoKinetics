@@ -13,3 +13,6 @@ docs/veinik/
 _reference/graphing/*.pdf
 # personal Claude Code settings
 .claude/settings.local.json
+docs/build/
+docs/src/project/
+docs/Manifest.toml

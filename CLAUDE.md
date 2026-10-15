@@ -62,7 +62,7 @@ DESIGN.md describes the target. STATUS.md and the code say what exists. When the
 
 ## End of every slice (do this without being asked)
 
-1. Full test suite passes; note the count and run time.
+1. Full test suite passes; note the count and run time. The HTML docs build without warnings (`julia --project=docs docs/make.jl`), every new export has a docstring and an entry in `docs/src/api/`, and `docs/src/architecture.md` is updated if the structure changed.
 2. Update `docs/STATUS.md`: rewrite it to the current state (not a log).
 3. Mark the slice done in DESIGN §15. Update any DESIGN text the implementation proved wrong, logging the change in DECISIONS.md.
 4. Update this file if the working rules changed.

@@ -2,6 +2,13 @@
 # potentials (static) and conductor laws (kinetic). There are no sign flags: every force
 # is P = ∂U/∂E.
 
+"""
+    FormOfMotion
+
+Supertype of the forms of motion (domains). Each is a conjugate pair: a charge E (stored in
+the bodies' state) and a force P = ∂U/∂E. A new form of motion is a new subtype with its
+`charge_symbol`, `charge_unit`, `force_symbol` and `force_unit`; no solver code changes.
+"""
 abstract type FormOfMotion end
 
 "Thermal form of motion: charge entropy S [J/K], force temperature T [K]."
@@ -54,6 +61,20 @@ struct Displacement <: FormOfMotion end
 
 "Elastic rotation: charge angle θ [rad], force torque M [N m] (Veinik (6), (13): M dφ)."
 struct Angle <: FormOfMotion end
+
+"""
+    charge_symbol(domain) -> Symbol
+    charge_unit(domain) -> String
+    force_symbol(domain) -> Symbol
+    force_unit(domain) -> String
+
+Names and SI units of a form of motion's charge and force, e.g. `Thermal()`: `:S` [J/K] and
+`:T` [K]; `Volumetric()`: `:V` [m³] and `Symbol("-p")` [Pa].
+"""
+function charge_symbol end
+@doc (@doc charge_symbol) function charge_unit end
+@doc (@doc charge_symbol) function force_symbol end
+@doc (@doc charge_symbol) function force_unit end
 
 charge_symbol(::Thermal) = :S
 charge_unit(::Thermal) = "J/K"
