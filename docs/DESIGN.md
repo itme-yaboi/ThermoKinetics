@@ -147,14 +147,14 @@ Real-fluid models are explicit in (T, ρ). **Clapeyron.jl is the first backend**
 7. **Two-phase** (water/steam, later): backends must provide an (s, v, x)-flash behind the same `forces` interface.
 8. **Isentropic state at a given pressure** (needed by the ideal pump, §7.2): solve p(s, v) = p_target for v at fixed s. This is a 1-D monotone root find (∂p/∂v|_s < 0); it is closed-form for the ideal gas.
 
-### 2.5 Slice 10a detail: the single-phase Clapeyron backend (proposed, 2026-10-15, D-50; not reviewed)
+### 2.5 Slice 10a detail: the single-phase Clapeyron backend (accepted 2026-10-15, D-50)
 
 **Packaging.** A package extension: Clapeyron is a weak dependency (`[weakdeps]`, `[extensions]` in `Project.toml`), the backend is `ext/ThermoKineticsClapeyronExt.jl`, and it loads when both packages are loaded (`using ThermoKinetics, Clapeyron`). The core declares the constructor `RealFluid` (and its docstring); the extension adds its methods and the material type. Tests and docs list Clapeyron, so the backend is always exercised.
 
 **The material.** `RealFluid(model; species)` wraps a Clapeyron model (any `EoSModel`: GERG-2008, a multiparameter single fluid, IAPWS-95, a cubic), with one `Species` name per component.
 - Charges (S, V, m₁ … m_n), domains (Thermal, Volumetric, Species…), one coupling group, as for `IdealGasMixture`; molar masses from the model.
 - Default models for the user's fluids (D-50): **helium** `GERG2008(["helium"])` (Clapeyron bundles no helium multiparameter equation), **CO₂** `SingleFluid("carbon dioxide")` (Span–Wagner), **water** `IAPWS95()`; and **air** as `GERG2008(["nitrogen", "oxygen", "argon"])` for textbook checks.
-- U(S, V, m) = A(T, V, n) + T S, with T from the inversion below and A = `Clapeyron.eos(model, V, T, n)` (the V-based Helmholtz energy; Clapeyron's p-based property functions are never used inside the material).
+- U(S, V, m) = A(T, V, n) + T S, with T from the inversion below and A = `Clapeyron.eos(model, V, T, n)` (the V-based Helmholtz energy). **This is the only Clapeyron entry point inside the material (noted by the user, D-50):** Clapeyron's p-based property functions (`entropy(model, p, T)`, `volume(model, p, T)`, …) take pressure, not volume, and are used only in tests, as an independent check.
 
 **The inversion (§2.4 items 1–5, as designed).**
 - With the composition fixed, solve S(T; V, n) = S_target, S = −∂A/∂T, by safeguarded Newton on T (∂S/∂T|_V = C_v/T > 0), with a bisection fallback inside a bracket from the model's validity range, a per-body warm start, |ΔT| ≤ 4 eps·T.

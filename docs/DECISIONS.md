@@ -641,12 +641,13 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 4. **Bug fixed:** `force_buffer` typed its buffer from the state only, so a reservoir force varying smoothly in t (the Otto piston, the E3 temperature path) failed when a Rosenbrock method differentiated f in t. The buffer now promotes over t's type. Earlier tests used only piecewise-constant inputs, which never carried the dual part.
 - **Built with:** the E4 test by a Sonnet subagent (reviewed; it passed unchanged once the fix was in); the material, E3 and the fix directly.
 
-### D-50 The real-fluid backend: split, packaging and fluids — split, extension and fluids accepted (user, 2026-10-15); slice 10a scope proposed (DESIGN §2.5)
+### D-50 The real-fluid backend: split, packaging and fluids — accepted (user, 2026-10-15): split, extension, fluids and the slice 10a scope (DESIGN §2.5)
 - **Split (user):** slice 10a is the single-phase backend with Brayton cycles; slice 10b adds the two-phase flash for pure fluids and Rankine cycles. Rankine boils and condenses its working fluid, which the single-phase backend cannot represent (§2.4 item 7). Alternative: one slice (larger, no checkpoint between the inversion and the flash).
 - **Packaging (user, after explanation):** Clapeyron is a weak dependency and the backend a package extension in `ext/`, in the same repository. Measured: Clapeyron 0.6.29 precompiles in ~30 s and loads in 0.76 s; the extension keeps the core free of its dependency stack (CSV, databases). Alternative: a normal dependency (simpler; every user pays the load).
 - **Fluids (user):** helium, water and CO₂. Helium uses GERG-2008 (Clapeyron bundles no helium multiparameter equation; GERG-2008 includes helium, and its density at 300 K, 1 MPa is 1.5970 kg/m³); CO₂ Span–Wagner (`SingleFluid("carbon dioxide")`); water IAPWS-95 (s = 392.8 J/(kg K) at 300 K, 1 MPa, matching the steam tables' 0.3930). Air (GERG-2008 N₂/O₂/Ar) for the textbook Brayton check. CoolProp stays a later wrapper (D-7).
 - **Probe findings:** all three models differentiate with ForwardDiff (gradients and Hessians of `eos(model, V, T, n)`). Clapeyron's bulk property functions take (p, T), not (V, T): inside the material only the V-based Helmholtz energy is used.
-- **To review:** the slice 10a scope in DESIGN §2.5 (material interface, guards, datum rule, tests).
+- **Volume-based Helmholtz only (user, noted):** inside `RealFluid` the only Clapeyron entry point is `eos(model, V, T, n)` and its AD derivatives; Clapeyron's (p, T)-based property functions (`entropy(model, p, T)`, `volume(model, p, T)`, …) are used only by tests, as an independent check.
+- **Scope (user):** DESIGN §2.5 approved as proposed. Added during the build: the ideal pump handles multi-species fluids whose material provides a multi-species isentropic state (air is the three-species GERG-2008 mixture: Clapeyron has no pseudo-pure air).
 
 ---
 
