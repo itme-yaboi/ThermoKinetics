@@ -177,6 +177,25 @@ Real-fluid models are explicit in (T, ρ). **Clapeyron.jl is the first backend**
   - **a simple supercritical CO₂ Brayton cycle** near the critical point, the same way;
   - **a superheated-steam expansion** in a turbine (single phase) vs. Çengel's tables.
 
+### 2.6 Slice 10b detail: two-phase pure fluids and the Rankine cycle (proposed, 2026-10-15, D-52; not reviewed)
+
+**Two-phase states of a pure `RealFluid` (§2.4 item 7).** A one-component body whose (s, v) lies in the dome is a saturated mixture; its state function stays U(S, V, m), behind the same `forces` interface.
+- **Saturation at T:** the liquid and vapour molar volumes v_l(T), v_v(T) solve p(T, v_l) = p(T, v_v) and μ(T, v_l) = μ(T, v_v), from the volume-based Helmholtz energy alone; Clapeyron's `saturation_pressure` gives the start, then Newton on these two equations (and one Newton step per dual level, IFT, for the derivatives).
+- **The flash (s, v) → (T, x):** the lever rule gives one equation in T, (v − v_l)(s_v − s_l) = (s − s_l)(v_v − v_l), with the quality x = (v − v_l)/(v_v − v_l); safeguarded Newton between the triple point and T_c, IFT for the derivatives.
+- **Phase test:** a state is two-phase when that solve gives T < T_c and 0 < x < 1; otherwise it is single-phase and goes through the 10a inversion. The two-phase state is the stable one there (it has the larger entropy at the same U, V).
+- **Forces:** T, −p_sat(T), and μ = g_sat (equal in both phases); U = m[(1 − x) u_l + x u_v]. Forces are continuous across the saturation boundary; the Hessian jumps there and is singular inside the dome (one direction, the tie line, leaves T and p unchanged), as the phase rule says. `is_stable` reports positive semidefinite there.
+- **Isentropic states at a pressure** (pumps, turbines): when s lies between s_l(p) and s_v(p), the delivered state is the wet mixture at T_sat(p) (a turbine exhausting wet steam).
+- **The dome guard of 10a is removed** for pure fluids; mixtures stay single-phase (their flash is future work).
+
+**Phase-selective draws (new, a design addition).** A condenser hotwell or a boiler drum is one two-phase body, but a feed pump takes liquid from it and a turbine takes vapour. `Stream(driver; draw = :mixture)`, `IdealPump(mdot; draw = :mixture)` and the `:liquid` / `:vapor` options carry the *saturated phase's* bundle (its specific entropy s_l or s_v; the same μ, which is equal in both phases) instead of the body's average. The bookkeeping is unchanged: the body loses ṁ h_l (or h_v), its quality adjusts, and the generation formula holds because the drawn phase is a valid state of the fluid at the body's T and μ. From a single-phase body any draw takes the body's own state.
+
+**Out of scope for 10b:** mixture flashes (multi-component VLE), metastable states, non-equilibrium (subcooled boiling, superheated liquid), solid phases, CoolProp.
+
+**Tests (proposed).**
+- **Kernel:** at random (T, x) in the dome for water and CO₂, (s, v) built from Clapeyron's saturation properties; the library recovers T, x, p_sat and μ (rtol 1e-9) and U; forces are continuous at x → 0 and x → 1; the Jacobian matches finite differences inside the dome; a single-phase state next to the dome stays single-phase; `isentropic_state` into the dome gives T_sat(p) and the quality from the lever rule.
+- **Çengel 9e Example 3-6 (SI):** 1 lbm of steam in a 2.29 ft³ rigid vessel at 250 psia (superheated, T₁ = 550 °F) cooled to 100 °F on a reservoir: the final state is a wet mixture at p_sat = 0.9505 psia; T₁ from the library vs. the table; energy and entropy closure through the dome boundary.
+- **Çengel 9e Example 10-1, the simple ideal Rankine cycle** (application test): a superheated boiler body (3 MPa, 350 °C, on a hot reservoir), a two-phase condenser body (75 kPa, on a reservoir at T_sat), an ideal turbine boiler → condenser (vapour, wet exhaust) and an ideal feed pump condenser → boiler with `draw = :liquid`. Textbook: x₄ = 0.8861, w_pump = 3.03 kJ/kg, w_net = 710 kJ/kg, η = 0.260 (within table precision); a hand calculation from Clapeyron's own saturation and (p, T) properties (rtol 1e-6); the loss map summing to the lost work (Gouy–Stodola).
+
 ## 3. Bodies and reservoirs
 
 ```julia
@@ -656,7 +675,7 @@ still sound.
 10. **Slice 10a — ✅ done 2026-10-15** (D-50; deviations D-51): the single-phase Clapeyron backend (§2.4, §2.5).
    - `RealFluid(model; species)` in the package extension `ext/ThermoKineticsClapeyronExt.jl` (Clapeyron a weak dependency); the safeguarded Newton inversion with implicit-function derivatives at every nesting level; the dome guard; `isentropic_state` for pure fluids and mixtures; multi-species ideal pumps; datum classes per material.
    - Tests: forces, volume, entropy and energy vs. Clapeyron's (p, T) route at random states of helium, CO₂ (incl. near-critical), water (liquid and vapor) and air; homogeneity, Hessian symmetry and C_v, exact Jacobians vs. finite differences, guards, isentropic states, the datum rule, reference values; applications: Çengel Example 9-6 (air Brayton), helium and sCO₂ Brayton loops vs. a hand calculation, Çengel Example 7-5 (steam turbine).
-10b. **Slice 10b — next: two-phase pure fluids and Rankine** (§2.4 item 7): the (s, v)-flash for a single substance (a 1-D solve in T with the lever rule); Rankine cycles vs. Çengel's examples 10-1 to 10-3.
+10b. **Slice 10b — next: two-phase pure fluids and Rankine** (§2.4 item 7, §2.6; D-52, proposed): the (s, v)-flash for a pure fluid, phase-selective draws on streams and pumps, the Rankine cycle vs. Çengel Example 10-1.
 11. **Then:** the plotting track (§17, to be refreshed for the element kinds of slices 6–8 first), and later (order to be agreed): two-phase flash, the momentum vector domain, inertance-driven streams, 3-D rigid-body rotation (§18.7), the D-48 future work.
 
 ## 16. Review record (revision 1 questions)

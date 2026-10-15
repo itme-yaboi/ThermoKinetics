@@ -663,6 +663,12 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 - **Built with:** the kernel tests by a Sonnet subagent (reviewed: one isentropic case ended inside the dome and was moved; the datum case used two names for one equation and was changed to a cubic; the mixture isentropic call needed its composition); the backend, the application tests and the hand calculations directly.
 - **To review:** items 3, 5 and 8.
 
+### D-52 Slice 10b scope: two-phase pure fluids, phase-selective draws, Rankine — proposed (2026-10-15; DESIGN §2.6; not reviewed)
+1. **The flash for pure fluids only:** (s, v) → (T, x) by the lever rule (one equation in T), with saturation from p and μ equality on the volume-based Helmholtz energy; IFT derivatives as in 10a. Alternative: Clapeyron's own flash routines inside the state function (would break the volume-based-only rule, D-50, and their derivatives are not IFT-exact).
+2. **Phase-selective draws (a design addition):** a `draw = :mixture | :liquid | :vapor` option on `Stream` and `IdealPump`. Needed for any physical Rankine model: the condenser is two-phase (its pressure is p_sat(T)), but the feed pump takes liquid. Alternatives: (a) separate liquid and vapour bodies with a phase-change conductor between them (two states, a kinetic interface law; more physics, more parameters); (b) a subcooled-liquid condenser body (single phase, but its pressure would then be set by liquid compressibility, not by saturation: wrong); (c) a separator element (a new element kind for what an option does).
+3. **Tests:** water and CO₂ in the dome vs. Clapeyron's saturation properties; Çengel Examples 3-6 (rigid-vessel cooling into the dome) and 10-1 (simple ideal Rankine).
+- **To review:** item 2 (the draw option versus a separator element or two-body phase change) and the scope as a whole.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)
