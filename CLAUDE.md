@@ -69,7 +69,7 @@ The author previously built a Julia thermal library (ThermalModeling / TSM), a c
 
 Network plotting (DESIGN §17, track P; not implemented yet) **must** use the compact orthogonal node-placement algorithm of Freivalds & Glagoļevs, *Graph Compact Orthogonal Layout Algorithm*: `_reference/graphing/Freivalds, Graph Compact Orthogonal Layout Algorith.pdf` (12 pages, with Algorithm 1 on p. 7). Read it, and DESIGN §17, before implementing any plotting.
 
-The paper specifies node placement only. Its references for the other phases are also in `_reference/graphing/`:
+The paper specifies node placement only. All plotting PDFs are local only (git-ignored, D-30). Its references for the other phases are also in `_reference/graphing/`:
 - Freivalds–Kikusts (`layopt.pdf`): normalization;
 - IPSep-CoLa (`An Incremental Procedure for.pdf`): the QP solver for compaction and normalization;
 - Dwyer–Marriott–Stuckey (`Fast node overlap removal.pdf`): non-overlap constraints;

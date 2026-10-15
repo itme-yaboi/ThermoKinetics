@@ -5,3 +5,5 @@ Manifest.toml
 _reference/graphing/*Lengauer*.pdf
 _reference/veinik_source/*_ocr.txt
 _reference/veinik_source/*_RU.txt
+# copyrighted papers: local only (D-30)
+_reference/graphing/*.pdf

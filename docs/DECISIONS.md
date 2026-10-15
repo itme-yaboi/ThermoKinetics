@@ -367,6 +367,15 @@ Each item lists what was built instead of the design text, and why.
 - **Why:** these are published, specific algorithms, so DESIGN §17.1 no longer relies on "standard textbook methods" for any phase. The separation-constraint structure keeps the solver small and dependency-free.
 - **Supersedes:** the open solver choice in D-23 and DESIGN §17.1 (options (a)/(b)).
 
+### D-30 All copyrighted PDFs are local only — accepted (user, 2026-10-14); supersedes the paper part of D-25
+- **Chosen:**
+  - Every PDF in `_reference/graphing/` is git-ignored (`_reference/graphing/*.pdf`), papers as well as books.
+  - The Freivalds–Glagoļevs paper, committed under D-25, is removed from the tree (`git rm --cached`); the user keeps backups.
+  - Its blob remains in history before this commit. History was not rewritten; there is no remote yet.
+- **Still tracked:** `_reference/veinik_source/README.md` and `notes_by_section_ch6-18.md` (notes, not copies of works).
+- **Consequence:** in a fresh clone, DESIGN §17.1 names every file exactly, but the PDFs must be copied in from the author's backups.
+- **Alternatives:** commit the papers (D-25 as written); rewrite history to purge the earlier blob. That is possible if the repository is ever published; ask first.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)
