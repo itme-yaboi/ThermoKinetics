@@ -7,3 +7,5 @@ _reference/veinik_source/*_ocr.txt
 _reference/veinik_source/*_RU.txt
 # copyrighted papers: local only (D-30)
 _reference/graphing/*.pdf
+# personal Claude Code settings
+.claude/settings.local.json

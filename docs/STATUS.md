@@ -1,16 +1,16 @@
 # STATUS
 
-*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-14, after slice 5.*
+*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-15 (design additions; no code change since slice 5).*
 
 ## Where we are
 
 - **Phase:** build. DESIGN.md revision 2 is approved.
 - **Done:** slices 1–5. The plotting design (DESIGN §17) is written but not built.
-- **Next:** not yet chosen; see DESIGN §15 "Later". Candidates:
-  - the real-fluid backend (Clapeyron) for Rankine and Brayton cycles;
-  - E3/E4;
-  - the plotting track;
-  - reactions and nuclear sources.
+- **Next:** slice 6, reactions and nuclear sources (chosen by the user, 2026-10-15). Not started. Scope and tests are to be detailed at the start of the slice. Slice 8 needs an ideal-gas mixture with formation enthalpies from it.
+- **Design under review (revision 3, proposed 2026-10-15, not built):**
+  - slice 7: mechanical and rotational systems (DESIGN §18, D-32);
+  - slice 8: rockets (DESIGN §19, D-33). The framework can model them; the limits are in §19.6.
+- **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
 - **Tests:** 184,615 checks pass in ~1.5 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
 ## What exists

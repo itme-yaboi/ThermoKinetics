@@ -442,6 +442,52 @@ Each item lists what was built instead of the design text, and why.
   - a flat ledger tolerance: simple, but wastes steps while ledgers are near zero.
 - **Why:** loss attribution is a consulting deliverable (CLAUDE.md). Correctness should be the default, and the measured overhead is small except where it buys accuracy.
 
+### D-32 Mechanical and rotational systems: elastic forms of motion, spring branches, sources, gravity, monotone friction — proposed (2026-10-15; DESIGN §18, slice 7)
+- **Asked for by the user:** basic mechanical systems (mass–spring–damper, pendulum) and rotational systems (gear trains, rotational dynamics) as intended uses (DESIGN §0.1).
+- **Chosen:**
+  - **Domains:** `Displacement` (x, F) and `Angle` (θ, M), from Veinik (5), (6), (12), (13).
+  - **Materials:** `LinearSpring`, `TorsionSpring` and `PendulumPotential`, each a one-DOF accumulator.
+  - **Converters:** the 3-port `SpringBranch` / `TorsionBranch`, mechanical twins of `InductorBranch`. Conversion between kinetic and elastic forms happens only between bodies.
+  - **Friction:** viscous friction is the existing momentum conductor (kernel B). New monotone closed-form laws, `QuadraticDrag` and `CoulombFriction` (tanh-regularized), have D = ΔP f(ΔP) ≥ 0 by type.
+  - **Gears:** the existing `Transformer`; clutches and brakes are a `Switched` conductor.
+  - **Prescribed forces and torques:** `Source(domain => rate(t))`, a `SourceTransfer` with its work ledgered.
+  - **Gravity:** `GravityField(g)`, a momentum source −Mg on each moving body, from the body's own inertial mass, with its work and ∫ w dt ledgered. The pendulum keeps gravity in its material instead.
+  - **Tolerance scaling** needs a material-supplied charge scale where A_kk can be ≤ 0 (`PendulumPotential`).
+- **Alternatives:**
+  - (a) Springs as `ElasticVolume` through a unit-area gyrator. This works today, but puts newtons into the −p slot and metres into m³, which is misleading, and it is non-negotiable 3's volumetric force.
+  - (b) Height as a charge with U ∋ Mgh (Veinik (11)). Potential energy would stay in the model and μ + gz would come automatically. It needs a converter between two domains of one body (ports must be on distinct nodes, D-29 §3), and it pays off only for hydrostatic heads. Revisit with balance-of-plant elevation.
+  - (c) Gravity as a constant-force `Displacement` reservoir per body. Wrong once the mass varies (rockets, §19).
+  - (d) A pendulum as one body with an internal converter. That breaks the rule that a body with no coupled part is a pure accumulator (DESIGN §2.2, Veinik §11).
+  - (e) Coulomb friction with true sticking (switched or complementarity). Later.
+  - (f) Euler's 3-D rigid-body equations. Needs vector angular momentum and a state-dependent antisymmetric operator inside one body, a new element kind (DESIGN §18.7). Not proposed.
+- **Why:** each piece is a new (E, P) pair, a material, a converter with constant antisymmetric W, a conductance type that is sign-safe by type, or a ledgered source. The assembler, the kernels and the solver are unchanged. That is the architecture's own test (DESIGN §0.1).
+- **To review:** the domain names; `GravityField` as a source rather than (b); whether slice 7 goes before slice 6 (it is independent).
+
+### D-33 Rockets: feasible with moving variable-mass bodies, momentum-carrying streams and an ideal nozzle — proposed (2026-10-15; DESIGN §19, slice 8)
+- **Asked for by the user:** the rocket equation with a simplified engine (combustion, then expansion through a nozzle), with confirmation of whether the framework allows it.
+- **Finding:** it does, after slice 6 (reactions, plus an ideal-gas mixture with formation enthalpies) and slice 7 (gravity, drag). No new solver and no new `Transfer` kind.
+- **Chosen:**
+  - **`Moving(material; m_dry)`:** U = U_int + p²/(2M), with M from the body's own mass charges. This gives μ_k = μ_k,int − w²/2.
+  - **Rigid links:** every body on the vehicle is `Moving`, held at one velocity by `Transformer(1)` on `Momentum` (index 2, D-29).
+  - **Streams and pumps** carry momentum ṁ w_u between moving bodies. The generation gains ṁΔw²/(2T_d) ≥ 0.
+  - **`Nozzle(A_t, ε; η)`:** a stream-kind outlet with choked mass flow, frozen isentropic exit state, v_e = √(2(h_c − h_e)), and a momentum bundle ṁ(w − v_e) − p_e A_e (stream thrust). Energy closes exactly per evaluation, the flow work at the moving exit plane included. Its generation is ṁ(s_e − s_c).
+  - **Ambient pressure** uses the existing piston–atmosphere gyrator with area A_e.
+  - **Test stand:** a w = 0 `Momentum` reservoir, whose momentum ledger rate is the thrust.
+- **Alternatives:**
+  - (a) One vehicle momentum with an inertia summing other bodies' masses. Non-local U (DESIGN §2.1).
+  - (b) Stationary tanks feeding a moving chamber. Books a spurious ½ṁw² as dissipation.
+  - (c) Thrust as a prescribed force source. No coupling to the engine, no energy closure, no loss attribution.
+  - (d) Resolving the nozzle as a chain of bodies with inertance streams. Needs inertance (deferred), compressible supersonic lumped flow and shocks; not worth it for a simplified engine.
+  - (e) A converter from the chemical form straight to momentum. Hides the thermal stage, so no I_sp physics and no loss map.
+- **Why:** thrust then *follows from* momentum conservation in Veinik's own terms: the jet is an advected charge bundle, and the vehicle gains what the jet takes away. Energy closure and the loss map come for free, attributed to injection, combustion and the nozzle.
+- **Known limits** (DESIGN §19.6):
+  - a lumped chamber and a quasi-1-D nozzle;
+  - constant c_p until the §2.4 Newton inversion exists (c_p(T), dissociation species);
+  - a frozen nozzle, and an equilibrium chamber rather than combustion kinetics;
+  - gaseous propellants until the real-fluid backend;
+  - one axis.
+- **To review:** whether slice 6 should support a sign-preserving nonlinear (mass-action) rate law as well as the linear affinity law. A rocket chamber does not need it; ignition and kinetics-limited combustion do.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)
