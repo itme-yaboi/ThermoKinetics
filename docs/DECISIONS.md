@@ -622,7 +622,7 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 - **Chosen:** DESIGN §19 and D-33 are accepted as written; slice 8 builds them.
 - **Clarification (slice numbering):** D-33's "To review" line asks whether "slice 6" should support a mass-action rate law. When D-33 was written, the reactions slice was planned as slice 6; D-34 reordered the slices (mechanics became 6, reactions 7) and answered yes. Slice 7 built both `AffinityLaw` and `MassAction` (D-39–D-41). Slice 6 (mechanics) has no rate laws.
 
-### D-48 Slice 8 implementation: deviations from DESIGN §19 — proposed for review (slice 8, 2026-10-15)
+### D-48 Slice 8 implementation: deviations from DESIGN §19 — accepted (user, 2026-10-15; items 1 and 3 kept as future work) (slice 8)
 1. **Loss attribution in an equilibrium chamber.** With a fast reaction the chamber sits at A ≈ 0, so the reaction element produces almost nothing (≈ 5e-10 W/K in the static fire) and the combustion irreversibility (≈ 2300 W/K) is booked on the injectors: their generation includes the jump from the feed's μ to the chamber's equilibrium μ. Total production still equals the jet's entropy minus the feeds', exactly. This is correct for a well-stirred lumped reactor; DESIGN §19.5 expected "combustion dominant", which holds only for a finite-rate or two-zone chamber (a frozen mixing zone feeding a reaction zone). Corrected in §19.5.
 2. **Species datum consistency.** An `IdealGas` has its own datum (h = c_p T, s = 0 at the reference state), different from a species' formation data, so an `IdealGas(:H2)` tank feeding a mixture holding `Species(:H2)` would exchange inconsistent μ. `compile` now refuses a species held both by a material with species data and by one without. Rocket tanks are one-species `IdealGasMixture`s, and `isentropic_state` was added for them (closed form).
 3. **Feeds into a richer mixture.** Pumps and flow boundaries may deliver a species set that is a subset of the receiving body's; streams still need equal sets (a stream can reverse, and would carry species the upstream body lacks). So the engine is pump- or boundary-fed; a pressure-fed (stream) feed needs a check valve, not built. A flow boundary accepts a one-species mixture as its fluid.
@@ -632,7 +632,7 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 7. **`consistent_state`** now scales its tolerance by the algebraic residuals' size: a light chamber pushed by its thrust has transformer residuals ~1e5 m/s², above which a fixed 1e-12 sits in round-off (Newton stalled).
 8. **The flight test is exact.** With adiabatic tanks and ideal pumps the delivered state depends only on the tanks' constant specific entropy, so the chamber stays steady and c_eff is constant: Beer & Johnston Sample Problem 14.9 (velocity, and its integral for the altitude) replaces the design's Tsiolkovsky bound.
 - **Built with:** the kernel tests by a Sonnet subagent (reviewed; its `@test a ≈ b && c ≈ d` lines were split, since that form does not parse as two comparisons); the physics, the application tests and the hand calculation directly.
-- **To review:** items 1 and 3 (whether a two-zone chamber or a pressure-fed feed is wanted).
+- **To review:** items 1 and 3 (whether a two-zone chamber or a pressure-fed feed is wanted). *(User, 2026-10-15: accepted as built; both kept as future work, to be addressed later: a finite-rate or two-zone chamber so the combustion loss is booked on the reaction, and a check valve for pressure-fed feeds.)*
 
 ---
 
