@@ -522,6 +522,15 @@ Each item lists what was built instead of the design text, and why.
    - G3, G4, G9, construction and validation, the kernel identities, the source ledgers, a random mechanical-chain A1/A3 test, the pendulum stiffness floor, rack and pinion, and a DC motor with a gearbox are in `test_mechanics.jl`.
 8. **`docs/veinik/08_validation_cases.md`** (user-approved, D-34): lines 60–75 were added, a blank line, then §G with the G1–G9 table. No existing line changed.
 
+### D-36 Veinik section notes are local only; history purged before the first remote — accepted (user, 2026-10-15); supersedes the notes part of D-25 and the "still tracked" line of D-30
+- **What happened:** the first push to the private GitHub remote (`itme-yaboi/ThermoKinetics`) carried `_reference/veinik_source/notes_by_section_ch6-18.md` (tracked since D-25) and, in older commits, the Freivalds–Glagoļevs PDF (untracked by D-30 but left in history). D-30 had asked for a purge before any publication; it was missed. The user deleted the GitHub repository.
+- **Chosen:**
+  - `notes_by_section_ch6-18.md` is git-ignored and local only, like the OCR texts. Only `_reference/veinik_source/README.md` stays tracked under `_reference/veinik_source/`.
+  - History was rewritten (`git filter-branch --index-filter … --prune-empty`, all branches) to remove both files from every commit; the old refs, reflog and objects were purged. All commit hashes changed. A backup bundle of the pre-rewrite repository was taken first.
+  - Before any push, the full list of tracked files and every path in history is shown to the user.
+- **Alternatives:** keep the notes tracked (D-25 as written); delete them in a new commit only (leaves them in history); force-push without deleting the remote (old commits can stay reachable on GitHub).
+- **Consequence:** in a fresh clone, the README's notes row and CLAUDE.md's pointer resolve only after the author copies the notes in locally. `docs/veinik/` is unaffected and remains the working reference.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

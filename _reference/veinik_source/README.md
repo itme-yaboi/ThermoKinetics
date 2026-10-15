@@ -1,4 +1,4 @@
-# Veinik source material (reference only, not tracked in git)
+# Veinik source material (reference only; only this README is tracked in git)
 
 Raw sources behind `docs/veinik/`. **Read the curated docs first.** Come here only to check what Veinik actually wrote, or to verify an equation.
 
@@ -17,4 +17,4 @@ Rules:
 - Units in the sources are kgf, kcal, kgf·m, and γ is specific weight. Convert to SI.
 - If a source equation conflicts with a non-negotiable in CLAUDE.md, the non-negotiable wins; log it in `docs/DECISIONS.md`.
 - Never use Veinik's later "chronal" writings (not included here).
-- This is a scanned copyrighted book for personal reference. Keep `reference/` out of git.
+- This is a scanned copyrighted book for personal reference. Keep everything here except this README out of git (D-25, D-36).
