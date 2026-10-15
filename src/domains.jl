@@ -23,6 +23,13 @@ struct Species <: FormOfMotion
     name::Symbol
 end
 
+"""
+Electrical form of motion: charge q [C], force electric potential φ [V]. Across material
+boundaries the true force for carriers is the electrochemical potential (`04`); within one
+conductor material φ serves. φ has no absolute zero, so only differences enter any law.
+"""
+struct Electrical <: FormOfMotion end
+
 charge_symbol(::Thermal) = :S
 charge_unit(::Thermal) = "J/K"
 force_symbol(::Thermal) = :T
@@ -32,6 +39,11 @@ charge_symbol(::Volumetric) = :V
 charge_unit(::Volumetric) = "m^3"
 force_symbol(::Volumetric) = Symbol("-p")
 force_unit(::Volumetric) = "Pa"
+
+charge_symbol(::Electrical) = :q
+charge_unit(::Electrical) = "C"
+force_symbol(::Electrical) = :φ
+force_unit(::Electrical) = "V"
 
 charge_symbol(::Species) = :m
 charge_unit(::Species) = "kg"
@@ -52,3 +64,4 @@ resolved to the equivalent of this force change, through its capacity.
 default_force_atol(::Thermal) = 1e-8      # K
 default_force_atol(::Volumetric) = 1e-4   # Pa
 default_force_atol(::Species) = 1e-6      # J/kg
+default_force_atol(::Electrical) = 1e-8   # V

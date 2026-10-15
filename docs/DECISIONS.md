@@ -321,6 +321,34 @@ Each item lists what was built instead of the design text, and why.
 9. **Heat-exchanger application test:** checked as first-order convergence (error ratio N = 10 → 20 within 1.8–2.2, Richardson value within 2e-3 of ε–NTU), not a fixed tolerance. Measured errors: −0.042, −0.021, −0.011 at N = 10, 20, 40.
 10. **Still deferred:** inertance-driven flows (accepted earlier), multi-species pumps and boundaries, real-fluid backends.
 
+### D-27 Slice 4 implementation: deviations from DESIGN.md — accepted (slice 4, 2026-10-14)
+1. **Coupled laws supply a factor, not a matrix.**
+   - `coupled_factor(law, …) → (B, W)` at the current state, with J = (BBᵀ + W) x on the exact discrete forces x = (X_Q, ΔP c).
+   - The ledger records ‖Bᵀx‖², which is sign-exact in floating point. The entropy written, Σ Q_i/T_i, equals it to round-off.
+   - This is DESIGN §5.2's `Conductance(B, W)` in functional form.
+2. **Coupled conductors default to `Split(½)` and accept only `Split`.**
+   - With coupling, D can be negative (thermoelectric generation), so a third node is not allowed (DESIGN §5.1).
+   - The internal node (kernel B) is not offered for coupled laws.
+3. **Exactly calibrated coupled laws** (beyond DESIGN §5.2's "matrix at a state-dependent temperature"):
+   - **`ThermoelectricConductance(R, K, α)`** reproduces J_e = (Δφ + αΔT)/R at any ΔT. Its PSD margin is exactly K T_a T_b, and its Peltier heat is αT̄ J_e.
+     - A single lumped element then reproduces the classical TEG balance Q_h = KΔT + αT_h I − ½I²R exactly at steady state.
+     - A discretized constant-α leg has exactly the Joule-only temperature profile, which is Kelvin's first relation with zero Thomson heat.
+   - **`KnudsenBarrier(gas; g, K)`** has zero mass flux exactly at p_a/√T_a = p_b/√T_b. Near equilibrium it equals Veinik's (291)–(299) barrier transformed to the mass basis, with ξ = g v²/T.
+4. **Basis transformations are full congruences** M = A L Aᵀ, not only diagonal S L S (DESIGN §5.2 updated). The (J_v, J_s) → (heat, mass) map needs A = [1/v 0; Ts/v T], which is lower-triangular. Congruence preserves symmetry, PSD and σ. Provided as `barrier_mass_basis`, `electrokinetic_mass_basis` and `thermoelectric_from_veinik`.
+5. **`OnsagerConductance(rows, M; W, magnetic)`:**
+   - Validated symmetric (1e-12 relative) and PSD (eigenvalues ≥ −1e-12·scale). Eigenvalues inside that validation tolerance are set to zero when B is formed; this is the only clamp, and it is round-off sized.
+   - W must be exactly antisymmetric and requires `magnetic = true`.
+   - Without a thermal row it is an engineering multi-row conductor, J = (M + W) ΔP.
+6. **`LinearConductance(domain, L)` replaces the `VolumeConductance` struct.** `VolumeConductance`, `Resistor(R)` (R > 0) and `MassConductance(species, L)` are constructors. A mass conductor moves mass at μ without entropy (isothermal diffusion); non-isothermal mass transport with transport heat uses a coupled law (Knudsen, or `OnsagerConductance` with a thermal row).
+7. **`steady_state` scales each residual row by its round-off floor**, Σ_j |∂r_k/∂x_j| s_j with s_j = capacity × max(|P_j|, 1).
+   - It stops at a scaled residual of 1e-14, or accepts a stall at ≤ 1e-10.
+   - Without this, a 1e6 W/K tie (realistic for an electrode on a sink plate) left an entropy-rate noise of ~eps·G·T above Newton's absolute tolerance, and the solve stalled at the true solution. Newton steps are unchanged by row scaling.
+8. **Test scope:**
+   - Kelvin's first relation is tested for constant α only (Thomson heat zero). A temperature-dependent α(T) is not supported yet.
+   - The couple's open-circuit voltage is checked to 1e-5, because the electrodes sit ~0.2 mK above T_c; the per-leg relation (278) is checked exactly using measured temperatures.
+9. **Electrical force is φ.** The electrochemical potential across material boundaries (contact potentials, 04) is not modeled yet: all electrical connections so far are within one conductor material.
+10. **Mass-transfer application test (membrane permeation, Sieverts) is deferred.** The mass conductor and the Knudsen barrier are delivered; the DESIGN §0.1 row stays partly open.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

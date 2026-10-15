@@ -1,57 +1,68 @@
 # STATUS
 
-*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-14, after slice 3.*
+*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-14, after slice 4.*
 
 ## Where we are
 
 - **Phase:** build. DESIGN.md revision 2 is approved.
-- **Done:** slices 1, 2 and 3. The plotting design (DESIGN §17) is written but not built.
-- **Next:** slice 4 (coupled conductors, electrical domain).
-- **Tests:** 176,167 checks pass in ~4 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). Most of that is one-time compilation of each element type's kernels and of the solver (D-26 §1). The first run after a dependency change also precompiles packages, which takes a few minutes.
+- **Done:** slices 1–4. The plotting design (DESIGN §17) is written but not built.
+- **Next:** slice 5, the mass-matrix DAE path (transformer converters, zero-capacity non-thermal nodes, kinetic DOFs, gyrator converters). It must come before balance-of-plant cycle work.
+- **Tests:** 184,436 checks pass in ~3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). Most of that is one-time compilation of each element type's kernels and of the solver (D-26 §1). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
 ## What exists
 
 | Area | In `src/` | Notes |
 |---|---|---|
-| Domains | `Thermal`, `Volumetric` (force −p), `Species(name)` | traits and default force tolerances (`domains.jl`) |
-| Materials | `ConstantCapacitySolid`, `IdealGas(species; R, cv)`, `ElasticVolume`, `Composite` | U(E) closed form; AD forces and Hessian; fixed-mass capacities; `valid_state`; `isentropic_state` (ideal gas). The ideal gas takes T and any two of m, p, V (`materials.jl`) |
-| Nodes | `Body`, `Reservoir(name; T, p, material)` or `Reservoir(name, domain => force, …)` | a material reservoir fixes μ(T, p) and s, so it can supply or absorb streams |
-| Conductors | `ThermalConductance(G)` (kernel A); `VolumeConductance(L)` with `InternalNode` (kernel B, default), `Split`, `Into` | coupled conductors rejected until slice 4 |
-| Flow | `Stream(HydraulicConductance(κ))` (upwinded bundle), `IdealPump(mdot)` (isentropic, work logged), `FlowBoundary(material; T, p, mdot, supply = :passive \| :pumped)`, `PassThroughOutlet(; mdot)` or `(; κ, p_out)` | single species for pumps and boundaries (`elements.jl`, `assembly.jl`) |
-| Model | `ThermoSystem`, `add!`, `connect!` (two-port, one-port, third-node), `compile` | bipartite MetaGraphsNext graph lowered to flat arrays; element groups in a `Vector{Any}` (one compiled solver for all models) |
-| Running | `simulate` (Rodas5P; ledgers excluded from the error norm; invalid or uphill-passive steps rejected); `steady_state` (active charges only, anchoring checked per conserved quantity, Newton then trust region); `rates` | `solve.jl` |
-| Results | `temperature`, `pressure`, `force`, `charges`, `flux`, `heat_flow`, `mass_flow`, `entropy_production(_parts)`, `generated_entropy`, `pump_work`, `reservoir_ledger`, `reservoir_charge`, `boundary_ledger`, `total_charge`, `total_energy`, `total_entropy`, `energy_residual`, `closure` (energy, entropy, charge; counts boundaries and work) | `solve.jl` |
-| Spatial | `rod!` | `spatial.jl` |
+| Domains | `Thermal`, `Volumetric` (force −p), `Species(name)`, `Electrical` (force φ) | traits and default force tolerances |
+| Materials | `ConstantCapacitySolid`, `IdealGas`, `ElasticVolume`, `LinearCapacitor`, `Composite` | U(E) closed form; AD forces and Hessian; fixed-mass capacities; `valid_state`; `isentropic_state` (ideal gas) |
+| Nodes | `Body`, `Reservoir(name; T, p, material)` or `Reservoir(name, domain => force, …)` | material reservoirs supply and absorb streams |
+| Conductors | `ThermalConductance(G)`; `LinearConductance` via `VolumeConductance`, `Resistor`, `MassConductance` with `InternalNode` / `Split` / `Into`; coupled `ThermoelectricConductance`, `KnudsenBarrier`, `OnsagerConductance(rows, M; W, magnetic)` (kernel A, `Split`, ‖Bᵀx‖² ledger) | basis maps: `thermoelectric_from_veinik`, `barrier_mass_basis`, `electrokinetic_mass_basis` |
+| Flow | `Stream(HydraulicConductance(κ))`, `IdealPump`, `FlowBoundary(…; supply)`, `PassThroughOutlet` | single species for pumps and boundaries |
+| Model | `ThermoSystem`, `add!`, `connect!`, `compile` | bipartite MetaGraphsNext graph lowered to flat arrays; element groups in a `Vector{Any}` |
+| Running | `simulate` (Rodas5P; ledgers excluded from the error norm; inadmissible steps rejected); `steady_state` (active charges, anchoring per conserved quantity, row-scaled Newton then trust region); `rates` | |
+| Results | `temperature`, `pressure`, `force`, `charges`, `flux`, `heat_flow`, `mass_flow`, `entropy_production(_parts)`, `generated_entropy`, `pump_work`, `reservoir_ledger`, `reservoir_charge`, `boundary_ledger`, `total_charge`, `total_energy`, `total_entropy`, `energy_residual`, `closure` | |
+| Spatial | `rod!` | |
 
 Validation covered (`test/`):
-- **Kernel identities:** thermal row, `Split`/`Into`, internal node, streams in both directions, pumps.
-- **08 §A:** A1–A7 on solid, gas and stream networks.
-- **08 §B:** B2, B3, B4, B5 (tank filling, including near-evacuated), plus Veinik's §23 and §11 checks.
-- **08 §C:** C1, C2, C7 (stream mixing, steady), C8.
-- **08 §D:** D1 (thermal and volumetric), D4, D5.
-- **Pumped loop:** pump work = heat rejected = T₀ Σ Ṡ_gen (Gouy–Stodola).
-- **Application tests (DESIGN §0.1):** composite wall (transient heat transfer); rigid-vessel and loose-piston heating (control mass); tank blowdown and counter-flow heat exchanger vs. ε–NTU (control volume).
+- **Kernel identities:** thermal row, `Split`/`Into`, internal node, streams, pumps, coupled kernel at ΔT/T ~ 1.
+- **08 §A:** A1–A7 on solid, gas and stream networks. A5 also covers Onsager validation and Onsager–Casimir (W does no dissipation).
+- **08 §B:** B2–B5.
+- **08 §C:**
+  - C1, C2, C3 (Joule, also through an internal node);
+  - C4 (Knudsen: the basis transformation, and simulated p′/p″ = √(T′/T″));
+  - C5 (Seebeck (278) exactly, Kelvin 2, Kelvin 1 for constant α);
+  - C6 (Saxén in both bases);
+  - C7, C8.
+- **08 §D:** D1 (thermal, volumetric, electrical), D2, D4, D5. The μ contact rule for mass conductors.
+- **Application tests (DESIGN §0.1):**
+  - composite wall (transient heat transfer);
+  - rigid-vessel and loose-piston heating (control mass);
+  - tank blowdown and counter-flow heat exchanger (control volume);
+  - resistor self-heating with its loss map, and thermoelectric generator efficiency including η_max (electrical circuits).
 
 ## Known shortcuts and open items
 
 - **Not built yet:**
-  - coupled conductors and mass conductors — slice 4;
-  - steady state for isolated groups (constraint rows);
-  - turbulent (√Δp) flow driver;
+  - DAE path, converters, kinetic DOFs, inductors — slice 5;
+  - steady state for isolated groups;
+  - turbulent flow driver;
   - multi-species pumps and boundaries;
   - inertance-driven flows;
-  - real-fluid backends.
-- **Steady state** of strongly coupled flow networks needs a transient warm start: `steady_state(cs; u0 = simulate(cs, (0, t)).u[end])` (D-26 §3).
+  - real-fluid backends;
+  - temperature-dependent Seebeck α(T);
+  - electrochemical potential at material boundaries;
+  - the membrane-permeation application test.
+- **Steady state** of strongly coupled flow networks needs a transient warm start (D-26 §3). Residual rows are scaled by their round-off floor (D-27 §7).
 - **Tolerances:**
-  - Abstol is per domain, scaled by capacity (D-20 §1, D-22 §5). The relative tolerance still multiplies |S|, which depends on the reference.
-  - Linear invariants hold to round-off amplified by implicit-solve conditioning (D-22 §6).
-  - Stream production is ≥ 0 exactly only in exact arithmetic; floating-point tolerance is about −1e-12 (D-26 §4).
-- **Compile time:** first use of each element type compiles its kernels; the solver compiles once (D-26 §1). Further cuts (precompile workloads) are possible later.
-- **Network plotting** is designed (DESIGN §17, D-23), not built. It must use the Freivalds–Glagoļevs layout in `_reference/graphing/`, with Lengauer (local only) for routing. Separate track, scheduled when the user asks.
+  - Abstol is per domain, scaled by capacity.
+  - Linear invariants hold to round-off amplified by implicit-solve conditioning.
+  - Stream production is ≥ 0 exactly only in exact arithmetic (D-26 §4).
+- **Compile time:** first use of each element type compiles its kernels; the solver compiles once (D-26 §1).
+- **Network plotting** is designed (DESIGN §17, D-23), not built. It must use the Freivalds–Glagoļevs layout in `_reference/graphing/`, with Lengauer (local only) for routing.
 - **The old library is not consulted** (D-21).
 
-## Next: slice 4
+## Next: slice 5
 
-- Coupled conductors with a thermal row (kernel A, Onsager matrix data): a Knudsen barrier in the (mass, entropy) basis; a thermoelectric couple.
-- `Electrical` domain, `LinearCapacitor`, resistor (kernel B); mass conductors on μ.
-- Tests: C3, C4, C5, C6 (with basis transformations), D1 (electrical), D2; application test for electrical circuits (DESIGN §0.1).
+- Mass-matrix DAE form (𝕄 du/dt = f with singular 𝕄) on Rodas5P/FBDF; algebraic rows with λ flux variables.
+- `Momentum`/`AngularMomentum`/`FluxLinkage` domains and inertial materials; gyrator converters (piston, motor); transformer converters (DAE); zero-capacity non-thermal nodes.
+- Tests: E1 (Carnot with reversible converters), E2 (Carnot with bridges), DAE consistency (constraint residuals at round-off, Pᵀ F ≡ 0); control-mass piston–cylinder compression application test.

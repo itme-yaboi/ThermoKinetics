@@ -53,7 +53,20 @@ struct NodePolicy
     G_h::Float64
 end
 
+"""
+    CoupledPolicy(w_a, w_b)
+
+Compiled kernel A for a coupled conductor (thermal row plus non-thermal rows; 07 §3.1):
+Q_a = −J_Q + w_a D and Q_b = J_Q + w_b D (the latter by remainder), with the law's factor B
+giving J = (BBᵀ + W) x and Ṡ_gen = ‖Bᵀx‖².
+"""
+struct CoupledPolicy
+    w_a::Float64
+    w_b::Float64
+end
+
 active(p::WeightsPolicy) = (p.w_a > 0, p.w_b > 0, p.w_h > 0)
+active(::CoupledPolicy) = (true, true, false)
 active(p::NodePolicy) = (p.G_a > 0, p.G_b > 0, p.G_h > 0)
 
 """
@@ -106,6 +119,7 @@ end
 nledger(::ThermalRow) = 1
 nledger(::WeightsPolicy) = 1
 nledger(::NodePolicy) = 2
+nledger(::CoupledPolicy) = 1
 
 # --- compiled representation -------------------------------------------------------------------
 
@@ -246,6 +260,7 @@ end
 function _compile_kernel(el::Conductor)
     pol = el.dissipation
     pol === nothing && return ThermalRow()
+    pol isa Split && has_thermal_row(el.law) && return CoupledPolicy(1 - pol.w, pol.w)
     pol isa Split && return WeightsPolicy(1 - pol.w, pol.w, 0.0)
     pol isa Into && return WeightsPolicy(0.0, 0.0, 1.0)
     pol isa InternalNode && return NodePolicy(pol.G_a, pol.G_b, pol.G_h)
@@ -566,6 +581,32 @@ function transfer(c::CompiledConductor{<:ConductorLaw,K,N}, P, u, cs::CompiledSy
     h = distribute_heat(c.kernel, D, Ta, Tb, Th)
     return (; Q = zero(D), J, D, h.Q_a, h.Q_b, h.Q_h, T_a = _node_T(P, cs, c.a), T_b = _node_T(P, cs, c.b),
             T_h = c.h == 0 ? oftype(D, NaN) : _node_T(P, cs, c.h), h.T_m, h.S_gen, h.parts)
+end
+
+"""
+Coupled conductor (kernel A with a thermal row, 07 §3.1): x = (X_Q, ΔP c), J = (BBᵀ + W) x.
+Heat Q_a = −J_Q + w_a D, Q_b = D − Q_a; Ṡ_gen = ‖Bᵀx‖² ≥ 0 exactly.
+"""
+function transfer(c::CompiledConductor{<:ConductorLaw,CoupledPolicy,N}, P, u, cs::CompiledSystem, t) where {N}
+    Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)
+    w_a, w_b = c.kernel.w_a, c.kernel.w_b
+    cc = w_a / Ta + w_b / Tb
+    Pa = SVector{N}(ntuple(k -> P[c.fa[k]], Val(N)))
+    Pb = SVector{N}(ntuple(k -> P[c.fb[k]], Val(N)))
+    ΔP = Pa - Pb
+    x = vcat(SVector((Ta - Tb) / (Ta * Tb)), ΔP * cc)
+    B, W = coupled_factor(c.law, Ta, Tb, Pa, Pb, cc, w_b)
+    y = B' * x
+    Jall = B * y + W * x
+    J_Q = Jall[1]
+    J = SVector{N}(ntuple(k -> Jall[k+1], Val(N)))
+    D = sum(ΔP .* J)
+    Q_a = -J_Q + w_a * D
+    Q_b = D - Q_a
+    S_gen = sum(abs2, y)
+    z = zero(D)
+    return (; Q = J_Q, J, D, Q_a, Q_b, Q_h = z, T_a = Ta, T_b = Tb, T_h = oftype(Ta, NaN), T_m = oftype(Ta, NaN),
+            S_gen, parts = (; total = S_gen))
 end
 
 """

@@ -118,24 +118,248 @@ has_thermal_row(::ThermalConductance) = true
 conductance_QQ(law::ThermalConductance, Ta, Tb) = law.G * Ta * Tb
 
 """
+    LinearConductance(domain, L)
+
+One non-thermal row: J = L (P_a − P_b), L ≥ 0, for any form of motion. The released power
+D = L ΔP² ≥ 0 is placed by the conductor's dissipation policy. Use the named constructors
+`VolumeConductance`, `Resistor` and `MassConductance`.
+"""
+struct LinearConductance{D<:FormOfMotion} <: ConductorLaw
+    domain::D
+    L::Float64
+    function LinearConductance(domain::FormOfMotion, L::Real)
+        domain isa Thermal && throw(ArgumentError("use ThermalConductance for the thermal row"))
+        (L >= 0 && isfinite(L)) || throw(ArgumentError("conductance must be ≥ 0 and finite, got $L"))
+        return new{typeof(domain)}(domain, L)
+    end
+end
+
+nonthermal_domains(law::LinearConductance) = (law.domain,)
+fluxes(law::LinearConductance, ΔP) = SVector(law.L * ΔP[1])
+
+"""
     VolumeConductance(L)
 
 A damped piston or flexible membrane between two volumetric ports (07 §5): volume flux
 J_V = L (P_a − P_b) with P = −p, L ≥ 0 [m³/(Pa s)]. Volume moves toward the higher pressure,
 which is correct for a moving boundary. Pressure-driven *fluid* flow is mass transport,
-not this. The released power D = L ΔP² ≥ 0 is friction heat, placed by the conductor's
-dissipation policy.
+not this.
 """
-struct VolumeConductance <: ConductorLaw
-    L::Float64
-    function VolumeConductance(L::Real)
-        (L >= 0 && isfinite(L)) || throw(ArgumentError("volume conductance must be ≥ 0 and finite, got $L"))
-        return new(L)
+VolumeConductance(L::Real) = LinearConductance(Volumetric(), L)
+
+"""
+    Resistor(R)
+
+Ohmic conductor, R > 0 [Ω]: J_e = (φ_a − φ_b)/R. Joule heat D = ΔV²/R is placed by the
+dissipation policy (`InternalNode` for a resistor with its own heat path, `Into(node)` to
+dump it into a wall or reservoir).
+"""
+function Resistor(R::Real)
+    (R > 0 && isfinite(R)) || throw(ArgumentError("resistance must be positive and finite, got $R"))
+    return LinearConductance(Electrical(), 1 / R)
+end
+
+"""
+    MassConductance(species, L)
+
+Diffusion of one species driven by its chemical potential: J_m = L (μ_a − μ_b), L ≥ 0
+[kg² /(J s)]. Using μ, not concentration, is the contact rule (non-negotiable 5): at
+equilibrium μ is equal across the barrier, while p and concentration need not be.
+"""
+MassConductance(species::Symbol, L::Real) = LinearConductance(Species(species), L)
+
+# --- coupled laws (a thermal row plus non-thermal rows; kernel A, 07 §3.1) -------------------
+#
+# The forces are x = (X_Q, Y_1…Y_N) with X_Q = 1/T_b − 1/T_a and Y_k = ΔP_k c,
+# c = w_a/T_a + w_b/T_b. A coupled law supplies a factor B and an antisymmetric W at the
+# current state: J = (BBᵀ + W) x. Entropy production is ‖Bᵀx‖² ≥ 0 by construction.
+
+"""
+    coupled_factor(law, Ta, Tb, Pa, Pb, c, w) -> (B, W)
+
+Factor B (M_sym = BBᵀ) and antisymmetric part W of a coupled law at end temperatures
+`Ta`, `Tb`, end forces `Pa`, `Pb` of its non-thermal rows, weight `c` and Split fraction `w`.
+"""
+function coupled_factor end
+
+"The full coupled matrix BBᵀ + W at a state, for inspection and tests (c from the Split fraction w)."
+function coupled_matrix(law::ConductorLaw, Ta, Tb, Pa, Pb, w)
+    c = (1 - w) / Ta + w / Tb
+    B, W = coupled_factor(law, Ta, Tb, Pa, Pb, c, w)
+    return B * B' + W
+end
+
+"Two-row factor B = [√K′ √g·b; 0 √g]: J_k = g (Y + b X_Q), J_Q = g b Y + (g b² + K′) X_Q."
+@inline function _two_row_factor(Kp, g, b, Kzero::Bool)
+    sK = Kzero ? zero(g) : sqrt(Kp)
+    sg = sqrt(g)
+    return SMatrix{2,2}(sK, zero(sg), sg * b, sg), zero(SMatrix{2,2,typeof(sg)})
+end
+
+"""
+    ThermoelectricConductance(; R, K, α)
+
+A thermoelectric element (Veinik's thermoelectric couple leg, §44–47): electrical resistance
+R > 0 [Ω], open-circuit thermal conductance K ≥ 0 [W/K], Seebeck coefficient α [V/K].
+Calibrated so that, exactly at any finite ΔT:
+- J_e = (Δφ + α ΔT)/R, so the open-circuit voltage is −α ΔT (Seebeck; (278));
+- J_Q = K ΔT + α T_a T_b c J_e, the Peltier heat Π J_e with Π = α T̄ (Kelvin's second relation);
+- the coupled matrix is PSD with margin exactly K T_a T_b.
+"""
+struct ThermoelectricConductance <: ConductorLaw
+    R::Float64
+    K::Float64
+    α::Float64
+    function ThermoelectricConductance(; R::Real, K::Real, α::Real)
+        (R > 0 && isfinite(R)) || throw(ArgumentError("resistance must be positive and finite, got $R"))
+        (K >= 0 && isfinite(K)) || throw(ArgumentError("thermal conductance must be ≥ 0 and finite, got $K"))
+        isfinite(α) || throw(ArgumentError("Seebeck coefficient must be finite"))
+        return new(R, K, α)
     end
 end
 
-nonthermal_domains(::VolumeConductance) = (Volumetric(),)
-fluxes(law::VolumeConductance, ΔP) = SVector(law.L * ΔP[1])
+has_thermal_row(::ThermoelectricConductance) = true
+nonthermal_domains(::ThermoelectricConductance) = (Electrical(),)
+
+function coupled_factor(law::ThermoelectricConductance, Ta, Tb, Pa, Pb, c, w)
+    g = 1 / (law.R * c)
+    b = law.α * Ta * Tb * c
+    return _two_row_factor(law.K * Ta * Tb, g, b, law.K == 0)
+end
+
+"""
+    thermoelectric_from_veinik(L11, L12, L22; T)
+
+Convert a leg's coefficients in Veinik's (277) variables at temperature T into a
+`ThermoelectricConductance`:
+- J_E = L11 δφ + L12 ΔT/T;
+- J_Q = L21 δφ + L22 ΔT/T.
+
+R = 1/L11, α = L12/(L11 T), K = L22/T − α² T L11. Requires L11 L22 ≥ L12² (that is, K ≥ 0).
+"""
+function thermoelectric_from_veinik(L11::Real, L12::Real, L22::Real; T::Real)
+    _check_positive(L11, "L11")
+    _check_positive(T, "temperature")
+    α = L12 / (L11 * T)
+    K = L22 / T - α^2 * T * L11
+    K >= -1e-12 * abs(L22 / T) ||
+        throw(ArgumentError("L11 L22 < L12²: the leg's Onsager matrix is not positive semidefinite"))
+    return ThermoelectricConductance(R = 1 / L11, K = max(K, 0.0), α = α)
+end
+
+"""
+    KnudsenBarrier(gas; g, K = 0.0)
+
+A molecular-flow (Knudsen) barrier between two volumes of `gas` (an `IdealGas`), with mass and
+heat rows (Veinik §49). Mass flux J_m = g F, with F = Δ(μ/T) + (c_p − R/2) ln(T_a/T_b) and
+g > 0 [kg² K/(J s)]. Hence J_m = 0 exactly when p_a/√T_a = p_b/√T_b (thermal transpiration,
+(300)), at any finite ΔT. K ≥ 0 [W/K] is the barrier's own heat conduction. Near equilibrium
+it coincides with Veinik's barrier (291)–(299) transformed to the mass basis
+(`barrier_mass_basis`, with ξ = g v²/T).
+"""
+struct KnudsenBarrier <: ConductorLaw
+    gas::IdealGas
+    g::Float64
+    K::Float64
+    function KnudsenBarrier(gas::IdealGas; g::Real, K::Real = 0.0)
+        (g > 0 && isfinite(g)) || throw(ArgumentError("g must be positive and finite, got $g"))
+        (K >= 0 && isfinite(K)) || throw(ArgumentError("thermal conductance must be ≥ 0 and finite, got $K"))
+        return new(gas, g, K)
+    end
+end
+
+has_thermal_row(::KnudsenBarrier) = true
+nonthermal_domains(law::KnudsenBarrier) = (Species(law.gas.species),)
+
+"ln(r)/(r − 1), smooth through r = 1."
+@inline function _logratio(r)
+    d = r - 1
+    return abs(d) < 1e-4 ? 1 - d / 2 + d^2 / 3 - d^3 / 4 : log(r) / d
+end
+
+function coupled_factor(law::KnudsenBarrier, Ta, Tb, Pa, Pb, c, w)
+    gas = law.gas
+    cp = gas.cv + gas.R
+    μ̃ = w * Pa[1] + (1 - w) * Pb[1]                      # μ_a/T_a − μ_b/T_b = Δμ c − μ̃ X_Q
+    λ = Ta * _logratio(Ta / Tb)                          # ln(T_a/T_b) = λ X_Q
+    b = -μ̃ + (cp - gas.R / 2) * λ
+    return _two_row_factor(law.K * Ta * Tb, law.g + zero(b), b, law.K == 0)
+end
+
+"""
+    OnsagerConductance(rows, M; W = nothing, magnetic = false)
+
+A general linear conductor over `rows` (a tuple of domains). Validated at construction: M must
+be symmetric and positive semidefinite; an antisymmetric W (Hall-type effects) is accepted
+only with `magnetic = true` (Onsager–Casimir, non-negotiable 4).
+- If `rows` starts with `Thermal()`: a coupled conductor (kernel A). M acts on the exact
+  discrete forces x = (X_Q, ΔP c) and is constant; build it from data with
+  `barrier_mass_basis` or similar.
+- Otherwise: non-thermal rows only, J = (M + W) ΔP, with heat placed by the dissipation
+  policy.
+"""
+struct OnsagerConductance{R<:Tuple,N,NN} <: ConductorLaw
+    rows::R
+    M::SMatrix{N,N,Float64,NN}
+    B::SMatrix{N,N,Float64,NN}
+    W::SMatrix{N,N,Float64,NN}
+    function OnsagerConductance(rows::Tuple, M::AbstractMatrix; W = nothing, magnetic::Bool = false)
+        N = length(rows)
+        size(M) == (N, N) || throw(ArgumentError("M must be $N × $N for $N rows"))
+        all(d -> d isa FormOfMotion, rows) && allunique(rows) || throw(ArgumentError("rows must be distinct domains"))
+        nth = count(d -> d isa Thermal, rows)
+        (nth == 0 || (nth == 1 && rows[1] isa Thermal)) ||
+            throw(ArgumentError("the thermal row, if any, must come first"))
+        scale = max(maximum(abs, M), floatmin())
+        maximum(abs, M - M') <= 1e-12 * scale ||
+            throw(ArgumentError("M must be symmetric (Onsager); an antisymmetric part goes in W, with magnetic = true"))
+        F = eigen(Symmetric(Matrix{Float64}(M)))
+        minimum(F.values) >= -1e-12 * scale ||
+            throw(ArgumentError("M must be positive semidefinite (second law); eigenvalues $(F.values)"))
+        B = F.vectors * Diagonal(sqrt.(max.(F.values, 0.0)))
+        Wm = zeros(N, N)
+        if W !== nothing
+            magnetic || throw(ArgumentError("an antisymmetric part W is only allowed in a magnetic field: magnetic = true"))
+            size(W) == (N, N) && W == -transpose(W) || throw(ArgumentError("W must be exactly antisymmetric"))
+            Wm = Matrix{Float64}(W)
+        end
+        return new{typeof(rows),N,N * N}(rows, SMatrix{N,N}(Symmetric(Matrix{Float64}(M))), SMatrix{N,N}(B), SMatrix{N,N}(Wm))
+    end
+end
+
+has_thermal_row(law::OnsagerConductance) = law.rows[1] isa Thermal
+nonthermal_domains(law::OnsagerConductance) = has_thermal_row(law) ? Base.tail(law.rows) : law.rows
+fluxes(law::OnsagerConductance, ΔP) = (law.M + law.W) * ΔP
+coupled_factor(law::OnsagerConductance, Ta, Tb, Pa, Pb, c, w) = (law.B, law.W)
+
+"""
+    barrier_mass_basis(LV; T, v, s) -> M
+
+Transform Veinik's barrier coefficients LV, in the (J_v, J_s) basis against (Δp, ΔT) with
+Tσ = J·X ((291), lumped), into the library's coupled (heat, mass) basis at the reference state
+(T, v, s) of the fluid. The result is the congruence M = T·A·LV·Aᵀ with
+A = [1/v 0; T s/v T] in (mass, heat) order, returned in (heat, mass) order. Symmetry and
+positive semidefiniteness are preserved, and so is entropy production: σ = J_V·X_V/T = Jᵀx.
+"""
+function barrier_mass_basis(LV::AbstractMatrix; T::Real, v::Real, s::Real)
+    size(LV) == (2, 2) || throw(ArgumentError("LV must be 2 × 2"))
+    A = [1/v 0.0; T*s/v T]
+    Mmq = T * A * LV * A'
+    return [Mmq[2, 2] Mmq[2, 1]; Mmq[1, 2] Mmq[1, 1]]
+end
+
+"""
+    electrokinetic_mass_basis(LV; v) -> M
+
+Transform Veinik's electrokinetic coefficients LV, in the (J_e, J_v) basis against (Δφ, Δp)
+((316)–(317), isothermal), into the (charge, mass) basis against (Δφ, Δμ), with Δμ = v Δp at
+fixed T: M = A·LV·Aᵀ with A = diag(1, 1/v).
+"""
+function electrokinetic_mass_basis(LV::AbstractMatrix; v::Real)
+    size(LV) == (2, 2) || throw(ArgumentError("LV must be 2 × 2"))
+    A = [1.0 0.0; 0.0 1/v]
+    return A * LV * A'
+end
 
 # --- dissipation policies (DESIGN §5.1) ------------------------------------------------------
 
@@ -193,10 +417,14 @@ third_node(p::InternalNode) = p.h
 """
     Conductor(law; dissipation = nothing)
 
-A conductor element, joined to two nodes with `connect!`. A law with non-thermal rows
-releases power D ≥ 0, so it must say where that heat goes: `InternalNode(G_a = …, G_b = …)`
-(the default kind, kernel B), `Split(w)` or `Into(node)` (kernel A). A thermal-only law takes
-no policy.
+A conductor element, joined to two nodes with `connect!`.
+- A thermal-only law takes no policy.
+- A law with non-thermal rows only releases power D ≥ 0, so it must say where that heat
+  goes: `InternalNode(G_a = …, G_b = …)` (the default kind, kernel B), `Split(w)` or
+  `Into(node)` (kernel A).
+- A coupled law (a thermal row plus non-thermal rows) puts its released power into its own
+  ends: `Split(w)` only, defaulting to `Split(0.5)`. With coupling, D can be negative
+  (thermoelectric generation), so it may not be routed to a third node.
 """
 struct Conductor{L<:ConductorLaw,P<:Union{Nothing,DissipationPolicy}}
     law::L
@@ -206,9 +434,11 @@ struct Conductor{L<:ConductorLaw,P<:Union{Nothing,DissipationPolicy}}
         if isempty(rows)
             dissipation === nothing ||
                 throw(ArgumentError("$(typeof(law)) has no non-thermal rows; it takes no dissipation policy"))
+        elseif has_thermal_row(law)
+            dissipation === nothing && (dissipation = Split(0.5))
+            dissipation isa Split ||
+                throw(ArgumentError("a coupled conductor puts its released power into its own ends: use Split(w)"))
         else
-            has_thermal_row(law) &&
-                throw(ArgumentError("coupled conductors (thermal + non-thermal rows) arrive in slice 4"))
             dissipation === nothing &&
                 throw(ArgumentError("$(typeof(law)) dissipates; give dissipation = InternalNode(G_a = …, G_b = …) " *
                                     "(default kind), Split(w) or Into(node)"))

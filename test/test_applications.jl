@@ -183,3 +183,76 @@ end
         @test abs((2ε20 - ε10) - ε_exact) < 2e-3
     end
 end
+
+@testset "applications: electrical circuits" begin
+    @testset "resistor self-heating with its heat path" begin
+        # a 12 V resistor whose core (internal node) is bonded to a heat-sink plate, which is
+        # cooled by air at 300 K. Steady temperatures and the loss map follow from the series path.
+        V, R, Gcore, Gair, Tair = 12.0, 8.0, 0.5, 0.2, 300.0
+        P = V^2 / R
+        sys = ThermoSystem()
+        hi = add!(sys, Reservoir(:hi, Electrical() => V))
+        lo = add!(sys, Reservoir(:lo, Electrical() => 0.0))
+        air = add!(sys, Reservoir(:air; T = Tair))
+        sink = add!(sys, Body(:sink, ConstantCapacitySolid(0.05, 900.0); T = Tair))
+        res = connect!(sys, Conductor(Resistor(R); dissipation = InternalNode(G_h = Gcore, h = sink)), hi, lo)
+        cool = connect!(sys, Conductor(ThermalConductance(Gair)), sink, air)
+        cs = compile(sys)
+        u = steady_state(cs)
+        T_sink = Tair + P / Gair
+        T_core = T_sink + P / Gcore
+        @test temperature(cs, u, sink) ≈ T_sink rtol = 1e-10
+        @test flux(cs, u, res).T_m ≈ T_core rtol = 1e-10
+        # where the entropy is produced: in the core, across the bond, at the sink surface
+        Sp = entropy_production_parts(cs, u)
+        @test Sp[res].dissipation ≈ P / T_core rtol = 1e-10
+        @test Sp[res].conduction ≈ P * (1 / T_sink - 1 / T_core) rtol = 1e-9
+        @test Sp[cool].total ≈ P * (1 / Tair - 1 / T_sink) rtol = 1e-9
+        @test P ≈ Tair * sum(values(entropy_production(cs, u))) rtol = 1e-9    # all of P is lost work
+        # warm-up of the sink plate from ambient: first order with τ = C/G_air
+        τ = 0.05 * 900.0 / Gair
+        sol = simulate(cs, (0.0, 3τ); saveat = τ)
+        for (t, uu) in zip(sol.t, sol.u)
+            @test temperature(cs, uu, sink) ≈ Tair + (P / Gair) * (1 - exp(-t / τ)) rtol = 1e-7
+        end
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10 && cl.charge_rel <= 1e-10
+    end
+
+    @testset "thermoelectric generator efficiency" begin
+        α, R, K = 0.05, 1.0, 0.5                                # a module: Z = α²/(RK)
+        Th, Tc = 500.0, 300.0
+        Z = α^2 / (R * K)
+        function generator(Rload)
+            sys = ThermoSystem()
+            H = add!(sys, Reservoir(:H, Thermal() => Th, Electrical() => 0.0))
+            cold = add!(sys, Reservoir(:cold; T = Tc))
+            sink = add!(sys, Reservoir(:sink; T = Tc))
+            body = Composite(ConstantCapacitySolid(1.0, 400.0), LinearCapacitor(1e-3))
+            C = add!(sys, Body(:C, body, charges_at(body, (T = Tc,), (φ = 0.0,))))
+            connect!(sys, Conductor(ThermoelectricConductance(; R, K, α)), H, C)
+            connect!(sys, Conductor(ThermalConductance(1e7)), C, cold)              # cold electrode on the sink plate
+            connect!(sys, Conductor(Resistor(Rload); dissipation = Into(sink)), C, H)  # the load closes the circuit
+            cs = compile(sys)
+            u = steady_state(cs)
+            du = rates(cs, u)
+            Qh = -reservoir_ledger(cs, du, H).U                 # heat drawn from the hot side
+            Pload = reservoir_ledger(cs, du, sink).U            # electrical power dissipated in the load
+            return Qh, Pload, temperature(cs, u, C)
+        end
+        for m in (0.5, 1.0, 2.0)
+            Qh, Pload, TC = generator(m * R)
+            ΔT = Th - TC
+            I = α * ΔT / (R + m * R)
+            @test Pload ≈ I^2 * m * R rtol = 1e-9
+            @test Qh ≈ K * ΔT + α * Th * I - 0.5 * I^2 * R rtol = 1e-9        # standard TEG heat balance
+        end
+        # the optimal load R_L = R√(1 + Z T̄) gives the classical maximum efficiency
+        Qh, Pload, TC = generator(R * sqrt(1 + Z * (Th + Tc) / 2))
+        Tbar = (Th + TC) / 2
+        M = sqrt(1 + Z * Tbar)
+        η_max = ((Th - TC) / Th) * (M - 1) / (M + TC / Th)
+        @test Pload / Qh ≈ η_max rtol = 1e-6
+        @test Pload / Qh < 1 - Tc / Th                                         # below Carnot
+    end
+end

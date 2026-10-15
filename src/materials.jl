@@ -127,7 +127,7 @@ internal_energy(s::ConstantCapacitySolid, E) = s.m * s.c * s.T_ref * exp(E[1] / 
     charges_at(mat; kwargs...)
 
 Charges of a body made of `mat` at a given state. Solids: `T`. Ideal gas: `T` and two of
-`m`, `p`, `V`. Elastic volume: `V` or `p`.
+`m`, `p`, `V`. Elastic volume: `V` or `p`. Capacitor: `φ` or `q`.
 """
 function charges_at(s::ConstantCapacitySolid; T::Real)
     _check_positive(T, "temperature")
@@ -222,6 +222,31 @@ function charges_at(e::ElasticVolume; V = nothing, p = nothing)
     (p === nothing) == (V === nothing) && throw(ArgumentError("give exactly one of p or V"))
     V === nothing && (V = e.V0 + e.C * (e.p0 - p))
     return SVector(Float64(V))
+end
+
+# --- linear capacitor ---------------------------------------------------------------------------
+
+"""
+    LinearCapacitor(C)
+
+An ideal capacitor, capacitance C > 0 [F]: one form of motion (electrical), U(q) = q²/(2C), so
+φ = q/C. It is uncoupled; combine it with a thermal part through `Composite` to give a body
+both a temperature and a potential.
+"""
+struct LinearCapacitor <: Material
+    C::Float64
+    function LinearCapacitor(C::Real)
+        _check_positive(C, "capacitance")
+        return new(C)
+    end
+end
+
+domains(::LinearCapacitor) = (Electrical(),)
+internal_energy(c::LinearCapacitor, E) = E[1]^2 / (2c.C)
+
+function charges_at(c::LinearCapacitor; φ = nothing, q = nothing)
+    (φ === nothing) == (q === nothing) && throw(ArgumentError("give exactly one of φ or q"))
+    return SVector(Float64(q === nothing ? c.C * φ : q))
 end
 
 # --- composite (coupling groups) -------------------------------------------------------------

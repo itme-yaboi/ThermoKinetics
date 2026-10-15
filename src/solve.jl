@@ -128,12 +128,25 @@ function steady_state(cs::CompiledSystem; u0 = initial_state(cs))
         r .= view(du, act)
         return nothing
     end
-    prob = NonlinearProblem(resid!, base[act], cs)
-    sol = SciMLBase.solve(prob, NewtonRaphson())
-    if !SciMLBase.successful_retcode(sol)            # far from the solution: globalize
-        sol = SciMLBase.solve(prob, TrustRegion())
+    # Scale each residual row by its round-off floor, so the stopping test does not depend on
+    # how stiff a connection is: a 1e6 W/K tie has an entropy-rate noise of ~eps·G·T.
+    # Row scaling leaves the Newton steps unchanged.
+    x0 = base[act]
+    J0 = ForwardDiff.jacobian((r, x) -> resid!(r, x, cs), zeros(length(act)), x0)
+    rowscale = abs.(J0) * _charge_scales(cs, base)[act]
+    for k in eachindex(rowscale)
+        (isfinite(rowscale[k]) && rowscale[k] > 0) || (rowscale[k] = 1.0)
     end
-    SciMLBase.successful_retcode(sol) ||
+    scaled!(r, x, p) = (resid!(r, x, p); r ./= rowscale; nothing)
+    prob = NonlinearProblem(scaled!, x0, cs)
+    # converged: the scaled residual is at the target, or Newton stalled on the round-off floor
+    done(sol) = SciMLBase.successful_retcode(sol) ||
+                (all(isfinite, sol.resid) && maximum(abs, sol.resid) <= 1e-10)
+    sol = SciMLBase.solve(prob, NewtonRaphson(); abstol = 1e-14)
+    if !done(sol)                                    # far from the solution: globalize
+        sol = SciMLBase.solve(prob, TrustRegion(); abstol = 1e-14)
+    end
+    done(sol) ||
         error("steady-state solve failed: retcode $(sol.retcode). Try a transient warm start: " *
               "steady_state(cs; u0 = simulate(cs, (0, t)).u[end])")
     u = vcat(base, zeros(cs.nledger))
@@ -141,6 +154,26 @@ function steady_state(cs::CompiledSystem; u0 = initial_state(cs))
     v = passive_violations(cs, u)
     isempty(v) || _throw_passive(v, nothing)
     return u
+end
+
+"""
+Per physical slot, the charge equivalent of the absolute force: capacity 1/A_kk times
+max(|P_k|, 1). It sets each steady residual row's round-off floor (D-27).
+"""
+function _charge_scales(cs::CompiledSystem, u::AbstractVector)
+    s = ones(cs.nphys)
+    for (i, b) in enumerate(cs.bodies)
+        off = cs.body_offset[i]
+        N = ncharges(b.material)
+        E = SVector{N}(u[off:off+N-1])
+        A = eos_matrix(b.material, E)
+        F = forces(b.material, E)
+        for k in 1:N
+            v = max(abs(F[k]), 1.0) / abs(A[k, k])
+            s[off+k-1] = (isfinite(v) && v > 0) ? v : 1.0
+        end
+    end
+    return s
 end
 
 "Union–find root."

@@ -8,7 +8,9 @@ fluxes; one assembler does all conservation and entropy bookkeeping. See
 
 Implemented so far (see docs/STATUS.md): thermal, volumetric and species domains; solids,
 ideal gases, elastic volumes and composites; reservoirs; thermal and volume conductors
-with their dissipation policies; streams, ideal pumps, flow boundaries and outlets.
+with their dissipation policies; streams, ideal pumps, flow boundaries and outlets; the
+electrical domain, resistors, mass conductors and coupled (thermoelectric, Knudsen, Onsager)
+conductors.
 """
 module VeinikThermo
 
@@ -31,14 +33,17 @@ include("solve.jl")
 include("spatial.jl")
 
 # domains
-export FormOfMotion, Thermal, Volumetric, Species, charge_symbol, charge_unit, force_symbol, force_unit, producible
+export FormOfMotion, Thermal, Volumetric, Species, Electrical, charge_symbol, charge_unit, force_symbol, force_unit, producible
 # materials
-export Material, ConstantCapacitySolid, IdealGas, ElasticVolume, Composite,
+export Material, ConstantCapacitySolid, IdealGas, ElasticVolume, LinearCapacitor, Composite,
        domains, internal_energy, forces, eos_matrix, temperature, pressure, charges_at,
        capacity_matrix, is_stable, valid_state, mass_slots
 # elements
-export Body, Reservoir, ThermalConductance, VolumeConductance, Conductor, Split, Into, InternalNode,
+export Body, Reservoir, ThermalConductance, VolumeConductance, LinearConductance, Resistor, MassConductance,
+       ThermoelectricConductance, KnudsenBarrier, OnsagerConductance, Conductor, Split, Into, InternalNode,
        HydraulicConductance, Stream, IdealPump, FlowBoundary, PassThroughOutlet
+# basis transformations of Veinik's coefficient data
+export thermoelectric_from_veinik, barrier_mass_basis, electrokinetic_mass_basis
 # system
 export ThermoSystem, add!, connect!, compile, CompiledSystem, body_names, reservoir_names, conductor_names, element_names
 # running

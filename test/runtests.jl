@@ -15,5 +15,7 @@ include("helpers.jl")
     include("test_thermokinetics.jl") # 08 §C: C1, C2, C8
     include("test_unsteady.jl")       # 08 §D: D1 (thermal analogue), D4 (= D3 thermal), D5 (slab)
     include("test_streams.jl")        # slice 3: B5, C7, streams, pumps, boundaries
+    include("test_electrical.jl")     # slice 4: C3, D1, D2, resistors, mass conductors
+    include("test_coupled.jl")        # slice 4: C4, C5, C6, coupled kernel, Onsager–Casimir
     include("test_applications.jl")   # DESIGN §0.1 application tests
 end
