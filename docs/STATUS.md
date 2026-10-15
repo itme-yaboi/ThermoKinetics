@@ -80,7 +80,7 @@ Validation covered (`test/`):
 - **Mechanics limits** (DESIGN §18.7): one axis; no 3-D rigid-body rotation (Euler's equations); Coulomb friction regularized, with no true sticking; no lossy (mesh-efficiency) transformer; no linkages or contact.
 - **Mixtures and reactions** (DESIGN §8.1, D-41):
   - constant c_v per species, so high-temperature accuracy is limited (NASA polynomials come with the property backends);
-  - the trace floor: below 1e-13 of a body's mass the mixing term is smoothed, so a depleted species can read about −1e-12 of the body's mass instead of failing (`trace` keyword). When it matters and how to handle it: D-42;
+  - the trace floor: below 1e-13 of a body's mass the mixing term is smoothed, so a depleted species can read about −1e-12 of the body's mass instead of failing (`trace` keyword). When it matters and how to handle it: D-42. **Check D-44 for any reaction or nuclear process whose low-mass-fraction species you care about** (discharge-level tritium, ~10 kBq/L, sits at the floor);
   - mass action needs a body with a volume (gas); a solution uses `AffinityLaw`;
   - no mixture reservoirs or multi-species flow boundaries yet; reacting streams are out of scope;
   - `steady_state` refuses closed reacting groups (their element totals are conserved: the unimplemented constraint-row case); use `simulate`.

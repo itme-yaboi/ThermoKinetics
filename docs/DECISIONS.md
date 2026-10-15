@@ -599,6 +599,14 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 - **Alternatives:** revert to per-species scales (trace species read round-off as drift); leave the check to the user via `total_charge` (easy to forget).
 - **How to use:** for tritium accounting, check `closure(cs, sol).species[:HTO].abs` against an absolute limit (it sits at about eps × the body's mass, e.g. ≤ 1e-15 kg in 1 kg of water).
 
+### D-44 Low-mass-fraction species in reactions and nuclear processes: a modelling note — accepted (user, 2026-10-15); extends D-42
+- **The note:** when a chemical reaction or a nuclear process involves a species whose transport or rate you care about at a very low mass fraction of its body, check it against the trace floor (1e-13 of the body's mass, D-41, D-42) before trusting the result.
+  - **Exact regardless of the floor:** energy, entropy and every conservation check, and the heat carried with the species (μ_b dm_b stays consistent; its effect is ~1e-11 J for a kilogram-scale body).
+  - **Inexact below the floor:** μ_b itself (100× below the floor, about 4.6 RT too high), so any rate driven by differences in μ_b: permeation and diffusion between bodies (about 25× too small for a 1e-15 vs 1e-14 pair), partition equilibria, and mass-action rates involving it. First-order nuclear rates are not affected (they use the true amount).
+- **Where tritium lands (HTO in 1 kg of water):** 1 Ci ≈ 1e-7 of the mass (exact); 1 µCi ≈ 1e-13 (at the floor); drinking-water and discharge levels, ~10 kBq/L, ≈ 2e-13 (at the floor). Plant inventories, coolant activity, storage beds and breeding blankets are well above it.
+- **What to do:** for discharge-level or environmental tritium, or any trace species whose transport matters near or below 1e-13, lower `trace` on that body to ~1e-15 (not lower: round-off), or model the dilute species in its own smaller body. Read slightly negative amounts as zero.
+- **Alternatives:** lower the default now (cost: robustness margin over round-off shrinks for every model); leave it implicit in D-42 (easy to miss).
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)
