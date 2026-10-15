@@ -541,6 +541,17 @@ Each item lists what was built instead of the design text, and why.
 - **Alternatives:** keep `VeinikThermo.jl`; `GeneralizedThermo.jl`, `ThermoNetworks.jl`, `EntropyLedger.jl`, `ChargeForce.jl`.
 - **Why:** the user chose the repository name; Julia expects the repository `Name.jl` and the package `Name` to agree.
 
+### D-39 Slice 7 scope: mixture, reactions, nuclear and heat sources — proposed (2026-10-15; DESIGN §8.1–8.2; not reviewed)
+Detail of D-11 for the slice. No new element kind: reactions are `InternalTransfer`, nuclear and heat sources are `SourceTransfer` (DESIGN §4.2).
+1. **Constant c_v per species, closed-form U.** Alternative: NASA polynomials now, which need the Newton inversion of §2.4. Deferred to the property backends; costs high-temperature accuracy in slice 8.
+2. **Molar masses derived from atoms** through a small atomic-mass table, so reactions conserve mass to round-off. Alternative: user-given M with a tolerance check, which leaks mass at data precision (non-negotiable 1).
+3. **Every species stays present (m_i > 0).** Alternative: a regularized zero-mass species (μ → −∞ makes it delicate). Future work.
+4. **Mass action with the reverse rate implied:** ξ̇ = V k(T) Π c^order · (−expm1(−A/R̄T)). A·ξ̇ ≥ 0 holds exactly in floating point. Alternative: user-given forward and reverse constants (can contradict the thermodynamics); r_f − r_b computed separately (sign can fail near equilibrium in floating point).
+5. **Nuclear energy convention: dU = E_dep ξ̇ exactly.** The species change and the deposited heat enter the entropy as (Q̇ + A ξ̇)/T, booked as boundary entropy, never as production. Alternative: species exchanged with the outside at the body's μ, like `Source` (energy Q̇ + Σμ dm external). Rejected: the reported nuclear energy would depend on the chemical datum.
+6. **`HeatSource` is a separate element.** Alternative: `Source(Thermal() => Q̇)`. Rejected: `Source` prescribes a charge rate, and a heat source prescribes an energy rate.
+7. **Validation cases H1–H8** go into `docs/veinik/08_validation_cases.md` §H only with the user's approval (D-34 precedent); until then they live in DESIGN §8.2.
+- **To review:** items 1–7, and whether the tritium storage bed is the right nuclear application test.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

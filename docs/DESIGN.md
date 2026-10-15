@@ -368,6 +368,61 @@ PassThroughOutlet(u, ṁ_spec)    # external outflow at the upstream state, no g
   - `Source(domain => rate(t))` prescribes a non-thermal charge inflow into a body: a force into `Momentum`, a torque into `AngularMomentum`, a current into `Electrical`. Its energy P·rate is booked as external work, and the charge as received (negatively) by the source. Heat sources are not this element and are not built yet.
   - `GravityField(g)` is a momentum source, −M g on a body, where M is the body's own inertial mass. Its work is ledgered. It is a special-purpose element, flagged to revisit (D-34).
 
+### 8.1 Slice 7 detail (proposed, 2026-10-15, D-39; not reviewed)
+
+**Species data and the mixture material.**
+- `SpeciesData(name; atoms, cv, h_f, s0)` holds one species: its atoms as a `NamedTuple` (`(H = 2, O = 1)`; isotopes are their own symbols, `T`, `He3`), c_v [J/(kg K)], the formation enthalpy h_f [J/kg] at T_ref and the standard entropy s0 [J/(kg K)] at (T_ref, p_ref).
+- The molar mass is **derived from the atoms** through a small table of atomic masses (standard atomic weights for elements, atomic masses for the isotopes D, T, He3, He4, Li6, Li7, n). Each reaction then conserves mass to round-off by construction. Given molar masses could leak mass at data precision.
+- `IdealGasMixture(species...; T_ref = 298.15, p_ref = 101325)`: charges (S, V, m₁ … m_n), domains (`Thermal`, `Volumetric`, `Species(name)` per species). It is one coupling group. With R_i = R̄/M_i, v_ref,i = R_i T_ref/p_ref and C_v = Σ m_i c_v,i, U is closed-form:
+  - ln(T/T_ref) = (S − Σ m_i [s0_i + R_i ln(V/(m_i v_ref,i))]) / C_v
+  - U = Σ m_i [h_f,i − R_i T_ref + c_v,i (T − T_ref)]
+  - so p = Σ m_i R_i T/V (Dalton), and μ_i = h_i(T) − T s_i(T, p_i), the partial specific Gibbs energy. The mixing entropy is in s_i through p_i. U is first-order homogeneous.
+- c_v is **constant per species** (closed form, no inversion). Temperature-dependent c_p (NASA polynomials) needs the Newton inversion of §2.4 and comes with the property backends. This limits high-temperature accuracy (slice 8's chamber).
+- Every species must stay present (m_i > 0, `valid_state`). μ_i → −∞ as m_i → 0, so a model starts products at trace amounts. A zero-mass species is future work.
+
+**Reactions** (`Reaction`, kind `InternalTransfer`, on one body).
+- `Reaction(body, ν; law)`: ν is molar stoichiometry, `(:H2 => -2, :O2 => -1, :H2O => 2)`. The constructor checks Σ_i ν_i a_ei = 0 exactly for every element e. A body may hold several reactions.
+- Extent rate ξ̇ [mol/s]; affinity A = −Σ_i ν_i M_i μ_i [J/mol].
+- Bookkeeping (the one `apply!`): m_i += ν_i M_i ξ̇; S += A ξ̇/T; ledger Ṡ_gen = A ξ̇/T. So dU = T dS + Σ μ_i dm_i = 0 to round-off, and the heat of reaction appears as a temperature change through h_f.
+- **Linear law** `AffinityLaw(L)`: ξ̇ = L·A/T, with L ≥ 0 [mol² K/(J s)]. For several reactions in one body, L is a PSD matrix (Onsager coupling between reactions), and Ṡ_gen is computed in the factored form that is ≥ 0 in floating point, as for `OnsagerConductance`.
+- **Mass-action law** `MassAction(k0; b = 0, Ea = 0, orders = reactant ν)`: ξ̇ = V · k(T) · Π_r c_r^(order_r) · (−expm1(−A/(R̄T))), with c = m/(M V) [mol/m³] and k(T) = k0 (T/T_ref)^b exp(−Ea/(R̄T)). The reverse rate is implied by the thermodynamics (detailed balance), so no equilibrium constant is entered. The factor −expm1(·) has the sign of A exactly, so A·ξ̇ ≥ 0 holds in floating point, not only in exact arithmetic.
+
+**Nuclear processes** (`NuclearSource`, kind `SourceTransfer`, on one body).
+- `NuclearSource(body, ν; rate, E_dep, external = (nucleons = 0, charge = 0))`. Species carry a nucleon number and a net charge (from their atoms; a neutral species has charge 0). The constructor checks Σ ν_i A_i + external.nucleons = 0 and Σ ν_i Z_i + external.charge = 0. `external` declares particles from outside the model, such as the neutron in ⁶Li(n,α)T.
+- `rate = FirstOrder(λ)` gives ξ̇ = λ n_parent, where the parent is the single species with ν = −1 and λ is a number or t -> λ(t) (σφ(t) for a neutron-driven rate). `rate = t -> ξ̇` prescribes the extent rate directly. `half_life = …` is accepted in place of λ.
+- E_dep [J/mol of extent] is the energy deposited in the body (for tritium β decay, the mean electron energy, 5.7 keV per decay; the antineutrino's share leaves).
+- Bookkeeping: m_i += ν_i M_i ξ̇, and **dU = Q̇ = E_dep ξ̇ exactly**: S += (Q̇ + A ξ̇)/T, with A the transformation's affinity computed as for a reaction. Ledgers: the species mass received (per species), the external energy Q̇, and the boundary entropy (Q̇ + A ξ̇)/T, which can have either sign. Nothing is booked as production (D-11).
+- Mass is not conserved by a nuclear source (the mass defect): the species ledger accounts for it.
+
+**Heat sources** (`HeatSource(Q̇)`, kind `SourceTransfer`): a prescribed heat rate Q̇ [W] (number or t -> Q̇) into a body: S += Q̇/T. Ledgers: external energy Q̇ and boundary entropy Q̇/T. It covers nuclear (volumetric) heating and prescribed cooling. `Source(Thermal() => …)` stays refused, with a message pointing here.
+
+**Closure.** Species are no longer each conserved in a body with reactions. `closure` checks instead the element totals Σ_i a_ei m_i/M_i over all bodies (minus what nuclear sources delivered) and the total mass, plus every untouched domain as now. Energy and entropy closure include the new external and boundary ledgers.
+
+**Out of scope for slice 7:** reacting streams (a stream carries a frozen mixture), condensed phases, surface and electrochemical reactions, a zero-mass species, temperature-dependent c_p, neutron transport and burnup.
+
+### 8.2 Slice 7 tests (proposed)
+
+Kernel and invariants:
+- **Mixture:** U homogeneous; symmetric Hessian, PD at fixed mass; Dalton's law; μ_i equals the closed-form h_i − T s_i; a one-species mixture reproduces `IdealGas` (h_f = c_p T_ref, s0 = 0).
+- **Reaction kernel**, at random states for both laws: dU = 0 to round-off; A·ξ̇ ≥ 0 exactly; element totals and mass conserved to round-off; ξ̇ = 0 at A = 0.
+- **Validation:** an unbalanced reaction (atoms) or nuclear process (nucleons, charge) is refused.
+- **08 §A** on random reacting networks (several bodies, reactions, conductors, mass conductors): A1, A3, element conservation, and at steady state A = 0 for every reaction (the contact rule extended to reactions).
+
+Analytic and application cases (proposed as **08 §H**, added only with the user's approval, D-34 precedent):
+
+| Case | Setup | Expected |
+|---|---|---|
+| H1 Reversible isomerization | A ⇌ B, equal M, c_v and h_f, mass action k_f; closed rigid vessel | T and p exactly constant; n_A(t) exact exponential with rate k_f(1 + 1/K), K = exp(Δs°/R) |
+| H2 Equilibrium composition | H₂ + I₂ ⇌ 2HI-type gas reaction at fixed T (vessel on a reservoir) and, separately, adiabatic at fixed V | final composition = direct Gibbs minimization (fixed T) and entropy maximization at fixed U, V and elements (adiabatic), each solved independently in the test |
+| H3 Adiabatic constant-volume combustion | lean H₂/O₂ in N₂, fast mass action | final T from U conservation (closed form with constant c_v); ∫Ṡ_gen = S_f − S₀ |
+| H4 Isothermal calorimeter | H3 on a reservoir through a conductance | total heat to the reservoir = U(initial) − U(final at T_res), the formation-enthalpy difference |
+| H5 Coupled reactions | two reactions in one body with a symmetric PSD L | Ṡ_gen ≥ 0 throughout; equilibrium independent of L |
+| H6 Tritium decay | atomic T → ³He, half-life 12.32 a, E_dep for 5.7 keV | n_T(t) = n₀ e^(−λt); specific decay power ≈ 0.32 W per g of T; nucleons conserved; energy closure with the deposited heat |
+| H7 Bateman chain | A → B → C with λ_A ≠ λ_B | inventories and decay heat vs. the Bateman solution |
+| H8 Heat source | a lumped solid with Q̇ and a conductance G to a reservoir | T → T_res + Q̇/G exponentially (exact); entropy closure with the boundary entropy ∫Q̇/T dt |
+
+Application tests (DESIGN §0.1, "Chemical and nuclear"): H2 (equilibrium composition vs. Gibbs minimization) and a tritium storage bed (H6 inside a solid body that conducts its decay heat to a wall: inventory and wall heat vs. Bateman), plus H8 for the "internal heating" item of transient heat transfer.
+
 ## 9. Switched connections (built in slice 5: Boolean gates, D-29)
 
 `Switched(element, schedule)` scales the element's `Transfer` by a gate g ∈ {0, 1}, held as a parameter.
@@ -544,7 +599,7 @@ still sound.
    - Added `Displacement` and `Angle`, `LinearSpring`, `TorsionSpring` and `PendulumPotential` (with the `stiffness_floor` tolerance hook), `SpringBranch` and `TorsionBranch`, `QuadraticDrag` and `CoulombFriction`, `Source` and `GravityField`.
    - Gears, rack and pinion and clutches use the existing `Transformer` and `Switched`.
    - Tests: 08 §G G1–G9, a random-chain A1/A3 property test, rack and pinion, and a motor with a gearbox.
-7. **Slice 7 — next: reactions and nuclear sources** (§8, D-11). Scope and tests are to be detailed when the slice starts.
+7. **Slice 7 — next: reactions and nuclear sources** (§8, D-11). Scope and tests proposed in §8.1–8.2 (D-39), awaiting review.
    - It includes a sign-preserving nonlinear (mass-action) rate law alongside the linear affinity law. Only if it presents an issue does it move to future work, with the issue recorded (D-34).
    - Slice 8 needs two things from it: an ideal-gas mixture material with per-species formation enthalpy and standard entropy (so the affinity carries the heat of reaction), and the reaction element.
 8. **Slice 8 — proposed (revision 3, not reviewed): rockets** (§19, D-33). It adds `Moving`, momentum-carrying streams and pumps, `Nozzle`, and a displacement (∫ w dt) ledger on `GravityField` for variable-mass bodies. Tests are in §19.5. It needs slices 6 and 7.
