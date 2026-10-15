@@ -168,6 +168,9 @@ U is first-order homogeneous.
 A species may be absent or depleted. Below `trace` × Σ m (default 1e-13 of the body's mass),
 the mixing term n ln n is continued smoothly (D-41), so μ stays finite and a depleted species
 can read slightly negative instead of failing. Above it the mixture is exactly ideal.
+It matters only if a species below the floor has a driving force you need (its permeation,
+a rate that depends on it, its equilibrium pressure): then lower `trace`, but not below
+~1e-15 (round-off), or give that species its own body (D-42).
 """
 struct IdealGasMixture{N,S<:Tuple} <: SpeciesMaterial
     species::S
