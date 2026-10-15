@@ -893,7 +893,7 @@ A spring is a body, joined to its two moving nodes by a 3-port converter. It is 
 
 ## 19. Rockets: the rocket equation and a simplified engine (revision 3; accepted 2026-10-15, D-47; slice 8)
 
-*Proposed 2026-10-15, not reviewed. Feasibility study and design. Decisions: D-33.*
+*Proposed 2026-10-15; accepted by the user 2026-10-15 (D-47). Feasibility study and design. Decisions: D-33.*
 
 **Verdict: possible within the framework.** It needs reactions (slice 7) and the mechanics additions (§18, built in slice 6), plus three new pieces:
 - a moving variable-mass material;
@@ -1022,7 +1022,7 @@ with the frozen chamber composition setting k and R (Veinik §59 (448), (453)). 
   - Real performance needs c_p(T) (NASA polynomials) and dissociation species.
   - c_p(T) needs the 1-D Newton inversion of §2.4, planned with the Clapeyron backend. The element interfaces do not change.
 - **Frozen nozzle flow;** no shifting equilibrium.
-- **Not real combustion kinetics.** The linear affinity law J = M_r A/T is right for an equilibrium chamber, but it does not model ignition or kinetics-limited combustion. Those need a sign-preserving nonlinear rate law (mass action: J ∝ 1 − e^(−A/RT), with A·J ≥ 0). That law is planned for slice 7 (D-34).
+- **Not real combustion kinetics.** The linear affinity law J = M_r A/T is right for an equilibrium chamber, but it does not model ignition or kinetics-limited combustion. Those need a sign-preserving nonlinear rate law (mass action: J ∝ 1 − e^(−A/RT), with A·J ≥ 0), which slice 7 built (`MassAction`, D-34, D-39). The chamber can use it, but a combustion-kinetics model (ignition delay, flame holding) is still out of scope.
 - **Gaseous propellants only,** until the real-fluid backend exists (liquid and cryogenic tanks).
 - **One axis:** vertical ascent, or straight-line flight in free space. Gravity turns and attitude dynamics need vector momentum and rigid-body rotation (§18.7).
 - **No feed-line or injector dynamics, and no combustion instability.** These need inertance (deferred).
