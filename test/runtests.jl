@@ -19,7 +19,7 @@ include("helpers.jl")
     include("test_electrical.jl")     # slice 4: C3, D1, D2, resistors, mass conductors
     include("test_coupled.jl")        # slice 4: C4, C5, C6, coupled kernel, Onsager–Casimir
     include("test_kinetic.jl")        # slice 5: kinetic DOFs, converters, junctions, transformers, switching
-    include("test_cycles.jl")         # slice 5: 08 §E Carnot cycles (E1, E2)
+    include("test_cycles.jl")         # slice 5, 9: 08 §E cycles (E1, E2 Carnot; E3 rectangular)
     include("test_mechanics.jl")      # slice 6: 08 §G G3, G4, G9; springs, friction laws, sources, gears
     include("test_reactions.jl")      # slice 7: 08 §H H1–H8, H10; mixtures, reactions, nuclear and heat sources
     include("test_rockets.jl")        # slice 8: moving bodies, momentum streams, nozzle, gravity on variable mass

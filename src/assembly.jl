@@ -929,7 +929,9 @@ end
 
 "The force buffer for state `u` at time `t`: body forces, reservoir forces, junction forces."
 function force_buffer(cs::CompiledSystem, u::AbstractVector, t::Real = 0.0)
-    Tel = promote_type(eltype(u), Float64)
+    # t is a dual number when a Rosenbrock method takes the time derivative of f: a reservoir force
+    # that varies smoothly in t then carries it, so the buffer must hold that type too
+    Tel = promote_type(eltype(u), typeof(t), Float64)
     P = Tel === Float64 ? cs.Pbuf : Vector{Tel}(undef, length(cs.Pbuf))
     for j in eachindex(cs.res_force)
         P[cs.nphys+j] = cs.res_force[j]

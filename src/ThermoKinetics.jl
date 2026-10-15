@@ -45,7 +45,7 @@ export FormOfMotion, Thermal, Volumetric, Species, Electrical, Momentum, Angular
        Displacement, Angle, charge_symbol, charge_unit, force_symbol, force_unit, producible
 # materials
 export Material, ConstantCapacitySolid, IdealGas, ElasticVolume, LinearCapacitor, InertialMass, RotationalInertia,
-       LinearInductor, LinearSpring, TorsionSpring, PendulumPotential, Composite,
+       LinearInductor, LinearSpring, TorsionSpring, PendulumPotential, Composite, EntropicCharge,
        domains, internal_energy, forces, eos_matrix, temperature, pressure, charges_at,
        capacity_matrix, is_stable, valid_state, mass_slots,
        SpeciesData, IdealGasMixture, IdealSolution, molar_mass, nucleons, species_names, species_data, Moving

@@ -201,6 +201,51 @@ function charges_at(g::IdealGas; T::Real, m = nothing, p = nothing, V = nothing)
     return SVector(m * s, Float64(V), Float64(m))
 end
 
+# --- entropic charge (Veinik's P = B e T body, §62) -------------------------------------------
+
+"""
+    EntropicCharge(domain; C, B, T_ref = 298.15)
+
+A body with a thermal and one other form of motion whose force is proportional to temperature,
+P = B e T (Veinik §62, the working body of the switched cycle converter; 08 E3): an "entropic"
+charge, like an ideal gas's pressure or a rubber band's tension. Charges (S, e), domains
+(Thermal, `domain`), one coupling group, with
+
+  U(S, e) = C T_ref exp((S + B e²/2)/C),
+
+so T = ∂U/∂S = T_ref exp((S + B e²/2)/C), U = C T, and P = ∂U/∂e = B e T. The heat capacity at
+constant charge is C [J/K]; B > 0 [force/(charge K)]. U is convex (det ∇²U = B T²/C > 0). P has
+an absolute zero at e = 0, which the force-ratio efficiency 1 − P″/P′ of the cycle needs.
+S = 0 at (T_ref, e = 0).
+"""
+struct EntropicCharge{D<:FormOfMotion} <: Material
+    domain::D
+    C::Float64
+    B::Float64
+    T_ref::Float64
+    function EntropicCharge(domain::FormOfMotion; C::Real, B::Real, T_ref::Real = 298.15)
+        domain isa Thermal && throw(ArgumentError("the second form of motion must not be Thermal"))
+        _check_positive(C, "heat capacity C")
+        _check_positive(B, "coupling coefficient B")
+        _check_positive(T_ref, "T_ref")
+        return new{typeof(domain)}(domain, Float64(C), Float64(B), Float64(T_ref))
+    end
+end
+
+domains(m::EntropicCharge) = (Thermal(), m.domain)
+internal_energy(m::EntropicCharge, E) = m.C * m.T_ref * exp((E[1] + m.B * E[2]^2 / 2) / m.C)
+
+"""
+    charges_at(mat::EntropicCharge; T, e)
+
+Charges (S, e) at temperature T and charge e.
+"""
+function charges_at(m::EntropicCharge; T::Real, e::Real)
+    _check_positive(T, "temperature")
+    isfinite(e) || throw(ArgumentError("charge must be finite"))
+    return SVector(m.C * log(T / m.T_ref) - m.B * e^2 / 2, Float64(e))
+end
+
 # --- elastic volume ------------------------------------------------------------------------
 
 """

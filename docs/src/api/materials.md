@@ -13,6 +13,7 @@ LinearSpring
 TorsionSpring
 PendulumPotential
 Composite
+EntropicCharge
 SpeciesData
 IdealGasMixture
 IdealSolution

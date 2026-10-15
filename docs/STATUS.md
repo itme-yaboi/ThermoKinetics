@@ -1,23 +1,23 @@
 # STATUS
 
-*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-15, after slice 8.*
+*Rewritten at the end of every slice; this page is not a log. Last updated: 2026-10-15, after slice 9.*
 
 ## Where we are
 
 - **Repository:** the package is `ThermoKinetics` (D-38), on the private GitHub repository `itme-yaboi/ThermoKinetics` (`origin`). `docs/veinik/` and the Veinik section notes are local only and must never be committed (D-36, D-37).
 - **Phase:** build. DESIGN.md revision 2 is approved. Revision 3 is accepted and built: mechanics (DESIGN §18) and rockets (§19).
-- **Done:** slices 1–8 and 7a. Slice 8 was rockets (D-33, D-47, D-48). Slice 7 was reactions, nuclear and heat sources (D-39 to D-44). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
+- **Done:** slices 1–9 and 7a. Slice 9 was cycles E3 (Veinik's rectangular cycle) and E4 (Otto) (D-49). Slice 8 was rockets (D-33, D-47, D-48). Slice 7 was reactions, nuclear and heat sources (D-39 to D-44). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
 - **Future work noted (D-48):** a finite-rate or two-zone rocket chamber, so the combustion loss is booked on the reaction rather than the injectors; a check valve for pressure-fed feeds.
-- **Next:** to be agreed (DESIGN §15 item 9: E3/E4, the Clapeyron backend, vector momentum, …; or the plotting track).
+- **Next:** slice 10, the Clapeyron real-fluid backend (Rankine, Brayton); then the plotting track (DESIGN §15).
 - **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
-- **Tests:** 205,261 checks pass in ~3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
+- **Tests:** 205,827 checks pass in ~3.3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
 ## What exists
 
 | Area | In `src/` | Notes |
 |---|---|---|
 | Domains | `Thermal`, `Volumetric` (−p), `Species`, `Electrical` (φ), `Momentum` (one axis, w), `AngularMomentum` (ω), `FluxLinkage` (i), `Displacement` (x, F), `Angle` (θ, M) | traits and default force tolerances |
-| Materials | `ConstantCapacitySolid`, `IdealGas`, `ElasticVolume`, `LinearCapacitor`, `InertialMass`, `RotationalInertia`, `LinearInductor`, `LinearSpring`, `TorsionSpring`, `PendulumPotential`, `Composite`; `IdealGasMixture`, `IdealSolution` from `SpeciesData` | U(E) closed form; AD forces and Hessian; `stiffness_floor` for non-convex U; `inertial_mass`; mixtures: formation data, molar masses from atoms, constant c_v, trace floor (D-41); `Moving(material; m_dry)` (variable-mass bodies, D-33) |
+| Materials | `ConstantCapacitySolid`, `IdealGas`, `ElasticVolume`, `LinearCapacitor`, `InertialMass`, `RotationalInertia`, `LinearInductor`, `LinearSpring`, `TorsionSpring`, `PendulumPotential`, `Composite`, `EntropicCharge` (P = B e T); `IdealGasMixture`, `IdealSolution` from `SpeciesData` | U(E) closed form; AD forces and Hessian; `stiffness_floor` for non-convex U; `inertial_mass`; mixtures: formation data, molar masses from atoms, constant c_v, trace floor (D-41); `Moving(material; m_dry)` (variable-mass bodies, D-33) |
 | Nodes | `Body`; `Reservoir` (constant or time-varying forces `domain => t -> P(t)`, or a material); `Junction` (zero capacity, algebraic forces) | |
 | Conductors | `ThermalConductance`; `LinearConductance` (`VolumeConductance`, `Resistor`, `MassConductance`), `QuadraticDrag`, `CoulombFriction`, with `InternalNode` / `Split` / `Into`; coupled `ThermoelectricConductance`, `KnudsenBarrier`, `OnsagerConductance` | basis maps from Veinik's data; monotone laws are D ≥ 0 by type |
 | Converters | `Converter(W, domains)` (antisymmetric W), `Gyrator`, `InductorBranch`, `SpringBranch`, `TorsionBranch`; `Transformer` (index-reduced DAE, Baumgarte τ: gears, rack and pinion) | power-exact; converted totals are not conserved (by design) |
@@ -36,7 +36,7 @@ Validation covered (`test/`):
 - **08 §B:** B2–B5.
 - **08 §C:** C1–C8.
 - **08 §D:** D1 (thermal, volumetric, electrical), D2, D4, D5.
-- **08 §E:**
+- **08 §E:** E3 (rectangular cycle: η = 1 − P″/P′, ∮T dS = −∮P de, reversible limit, reversed run), E4 (Otto, application test);
   - E1 (Carnot: the deficit and Ṡ_gen fall tenfold for a tenfold G);
   - E2 (η = 1 − T₂/T₁ at the internal temperatures, exactly; Gouy–Stodola).
 - **08 §G:** G1–G9.
@@ -76,7 +76,8 @@ Validation covered (`test/`):
   - tritium generation in irradiated water (D(n,γ)T, then decay) vs. Bateman, to saturation;
   - cold-gas thruster (isentropic blowdown, Δv by quadrature);
   - bipropellant static fire vs. an independent hand calculation (T_c, p_c, composition, c*, C_F, I_sp, loss map);
-  - flight vs. Beer & Johnston Sample Problem 14.9 (velocity and altitude, with gravity).
+  - flight vs. Beer & Johnston Sample Problem 14.9 (velocity and altitude, with gravity);
+  - the ideal Otto cycle vs. the cold-air standard (Çengel Example 9-3).
 
 ## Known shortcuts and open items
 
@@ -102,7 +103,6 @@ Validation covered (`test/`):
   - α(T) thermoelectrics;
   - contact potentials;
   - the membrane application test;
-  - E3, E4;
   - temperature-dependent c_p (NASA polynomials);
   - radiation conductance;
   - two-phase flow;

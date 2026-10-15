@@ -806,3 +806,82 @@ end
         @test nozzle_state(csB, sB.u[end], :nozzle).thrust ≈ nozzle_state(csA, sA.u[end], :nozzle).thrust rtol = 1e-9
     end
 end
+
+@testset "applications: power cycles, Otto (08 E4)" begin
+    # ideal Otto cycle, cold-air standard: a piston (prescribed motion, via a gyrator to a time-varying
+    # momentum reservoir) compresses and expands the gas isentropically; heat is added at constant
+    # volume by a prescribed HeatSource and rejected at constant volume through a switched conductor.
+    # Closed form: Çengel 9e Example 9-3 (cold-air-standard result) and Eq. 9-8
+    air = IdealGas(:air; R = 287.0, cv = 287.0 / 0.4)
+    k = (air.cv + air.R) / air.cv
+    T1, p1, m, r, qin, A = 290.0, 1e5, 1e-3, 8.0, 800e3, 0.01
+    V1 = m * air.R * T1 / p1
+    V2 = V1 / r
+    Qin = qin * m
+    tc, th, tr = 0.02, 0.01, 30.0
+    t1, t2, t3, tend = tc, tc + th, 2tc + th, 2tc + th + tr
+    G = 50.0                                                  # relaxation time m cv / G ≈ 0.008 s
+
+    T2 = T1 * r^(k - 1); p2 = p1 * r^k
+    T3 = T2 + qin / air.cv; p3 = p2 * T3 / T2
+    T4 = T3 * r^(1 - k); p4 = p1 * T4 / T1
+    qout = air.cv * (T4 - T1)
+    ηref = 1 - r^(1 - k)
+
+    w(t) = t < t1 ? -(V1 - V2) / A * (π / (2tc)) * sin(π * t / tc) :
+           t < t2 ? 0.0 :
+           t < t3 ? (V1 - V2) / A * (π / (2tc)) * sin(π * (t - t2) / tc) : 0.0
+    sys = ThermoSystem()
+    gas = add!(sys, Body(:gas, air; T = T1, p = p1, m = m))
+    piston = add!(sys, Reservoir(:piston, Momentum() => w))
+    sink = add!(sys, Reservoir(:sink; T = T1))
+    connect!(sys, Gyrator(A; a = Volumetric(), b = Momentum()), gas, piston)             # dV/dt = A w
+    connect!(sys, HeatSource(t -> t1 <= t < t2 ? Qin / th : 0.0), gas; name = :heater)
+    connect!(sys, Switched(Conductor(ThermalConductance(G)); on = t -> t >= t3), gas, sink; name = :reject)
+    cs = compile(sys)
+    stops = [t1, t2, t3]
+    sol = simulate(cs, (0.0, tend); saveat = [0.0, t1, t2, t3, tend], tstops = stops)
+    u0, u1, u2, u3, u4 = sol.u
+
+    @testset "states at the end of each phase match the closed form" begin
+        for (u, T, p) in ((u1, T2, p2), (u2, T3, p3), (u3, T4, p4), (u4, T1, p1))
+            @test temperature(cs, u, gas) ≈ T rtol = 1e-6
+            @test pressure(cs, u, gas) ≈ p rtol = 1e-6
+        end
+        @test temperature(cs, u4, gas) ≈ T1 rtol = 1e-8
+        @test charges(cs, u1, gas)[2] ≈ V2 rtol = 1e-8
+        @test charges(cs, u2, gas)[2] ≈ V2 rtol = 1e-8
+        @test charges(cs, u4, gas)[2] ≈ V1 rtol = 1e-8
+    end
+
+    @testset "compression and expansion are isentropic" begin
+        S(u) = charges(cs, u, gas)[1]
+        @test abs(S(u1) - S(u0)) <= 1e-8 * m * air.cv
+        @test abs(S(u3) - S(u2)) <= 1e-8 * m * air.cv
+    end
+
+    @testset "net work and thermal efficiency" begin
+        Wnet = reservoir_ledger(cs, u4, piston).U - reservoir_ledger(cs, u0, piston).U
+        Qin_l = -boundary_ledger(cs, u4, :heater).U
+        Qout = reservoir_ledger(cs, u4, sink).U
+        @test Qin_l ≈ Qin rtol = 1e-6
+        @test Qout ≈ qout * m rtol = 1e-6
+        @test Wnet ≈ Qin_l - Qout rtol = 1e-6
+        @test Wnet / Qin_l ≈ ηref rtol = 1e-6
+        @test Wnet / Qin_l ≈ 0.565 rtol = 2e-3                 # the textbook's rounding (56.5 %)
+    end
+
+    @testset "loss map: only the rejection conductor produces entropy" begin
+        gen = generated_entropy(cs, u4)
+        @test haskey(gen, :reject)
+        @test !haskey(gen, :heater)
+        @test !haskey(entropy_production(cs, u4), :heater)
+        Sexp = m * air.cv * log(T1 / T4) + qout * m / T1
+        @test gen[:reject] > 0
+        @test gen[:reject] ≈ Sexp rtol = 1e-6
+        @test sum(values(gen)) ≈ gen[:reject] rtol = 1e-12
+    end
+
+    cl = closure(cs, sol)
+    @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9
+end

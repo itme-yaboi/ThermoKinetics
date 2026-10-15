@@ -634,6 +634,13 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 - **Built with:** the kernel tests by a Sonnet subagent (reviewed; its `@test a ≈ b && c ≈ d` lines were split, since that form does not parse as two comparisons); the physics, the application tests and the hand calculation directly.
 - **To review:** items 1 and 3 (whether a two-zone chamber or a pressure-fed feed is wanted). *(User, 2026-10-15: accepted as built; both kept as future work, to be addressed later: a finite-rate or two-zone chamber so the combustion loss is booked on the reaction, and a check valve for pressure-fed feeds.)*
 
+### D-49 Slice 9: cycles E3 and E4 — accepted (user, 2026-10-15: E3/E4, then the Clapeyron backend, then plotting)
+1. **`EntropicCharge(domain; C, B, T_ref)`**, U(S, e) = C T_ref exp((S + B e²/2)/C), so T = T_ref exp((S + B e²/2)/C) and P = B e T: the simplest convex potential with Veinik's P = B e T (det ∇²U = B T²/C > 0). P has an absolute zero at e = 0, which the force-ratio efficiency needs (`05`). Alternatives: a gas body on the volumetric domain (its force −p has no B e T form at constant volume); a non-potential law (would break P = ∂U/∂E).
+2. **E3 is built from existing elements:** one body, switched charge taps to two charge reservoirs (on the electrical form of motion), and thermal contact. For the reversible limit the heat reservoir's temperature is prescribed along the ideal path (T = P/(B e) on the charge legs, constant e on the others), so switching is force-matched and exchange tracks the body; production then falls like 1/G. With fixed-temperature reservoirs it stays finite. η = 1 − P″/P′ holds exactly at the reservoir ledgers in every case: it is the charge leg's force ratio, not a heat-engine efficiency (`05`).
+3. **E4 (Otto)** is an application test (power cycles row): a gyrator piston driven by a smooth prescribed velocity, a `HeatSource` at constant volume, a switched rejection conductor. Validated against Çengel 9e Example 9-3 (cold-air standard, η = 0.565 for r = 8).
+4. **Bug fixed:** `force_buffer` typed its buffer from the state only, so a reservoir force varying smoothly in t (the Otto piston, the E3 temperature path) failed when a Rosenbrock method differentiated f in t. The buffer now promotes over t's type. Earlier tests used only piecewise-constant inputs, which never carried the dual part.
+- **Built with:** the E4 test by a Sonnet subagent (reviewed; it passed unchanged once the fix was in); the material, E3 and the fix directly.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)
