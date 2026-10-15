@@ -58,7 +58,7 @@ Validation covered (`test/`):
   - Linear invariants hold to round-off amplified by implicit-solve conditioning.
   - Stream production is ≥ 0 exactly only in exact arithmetic (D-26 §4).
 - **Compile time:** first use of each element type compiles its kernels; the solver compiles once (D-26 §1).
-- **Network plotting** is designed (DESIGN §17, D-23), not built. It must use the Freivalds–Glagoļevs layout in `_reference/graphing/`, with Lengauer (local only) for routing.
+- **Network plotting** is designed (DESIGN §17, D-23), not built. It must use the Freivalds–Glagoļevs layout in `_reference/graphing/`. Every phase's reference is now there (DESIGN §17.1, D-28).
 - **The old library is not consulted** (D-21).
 
 ## Next: slice 5

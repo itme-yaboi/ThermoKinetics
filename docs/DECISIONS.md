@@ -349,6 +349,24 @@ Each item lists what was built instead of the design text, and why.
 9. **Electrical force is φ.** The electrochemical potential across material boundaries (contact potentials, 04) is not modeled yet: all electrical connections so far are within one conductor material.
 10. **Mass-transfer application test (membrane permeation, Sieverts) is deferred.** The mass conductor and the Knudsen barrier are delivered; the DESIGN §0.1 row stays partly open.
 
+### D-28 Plotting references complete; compaction and normalization solver chosen — accepted (user supplied the references, 2026-10-14); details proposed
+- **References:** all the layout paper's references that the implementation needs are now in `_reference/graphing/`, catalogued in DESIGN §17.1 with what each is used for:
+  - Freivalds–Kikusts 2001 ([10]);
+  - IPSep-CoLa 2006;
+  - Dwyer–Marriott–Stuckey 2005 ([7]);
+  - Biedl–Madden–Tollis 2000 ([3], the journal version);
+  - Lengauer ([14], local only).
+- **Chosen:** the eq. (3) compaction and the normalization phase both use IPSep-CoLa's `solve_QPSC`: gradient projection, with projection by block merging and splitting on Lagrange multipliers. It is the same method as Freivalds–Kikusts' component shift/merge, so it is what the layout paper's authors used.
+  - Normalization follows Freivalds–Kikusts: segment coordinates, obstacle-graph ordering, node drift + 10 × size.
+  - Port assignment follows Biedl et al. §3.3.
+  - Non-overlap constraints come from the Dwyer–Marriott–Stuckey scan line.
+- **Alternatives:**
+  - a generic QP solver (OSQP and similar) — another dependency, no warm start, slower per the IPSep-CoLa §3.3 experiments;
+  - Freivalds–Kikusts' max-flow positive-cut formulation — superseded by the spanning-tree cut in the same paper;
+  - force-scan overlap removal — lower quality per Dwyer–Marriott–Stuckey.
+- **Why:** these are published, specific algorithms, so DESIGN §17.1 no longer relies on "standard textbook methods" for any phase. The separation-constraint structure keeps the solver small and dependency-free.
+- **Supersedes:** the open solver choice in D-23 and DESIGN §17.1 (options (a)/(b)).
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

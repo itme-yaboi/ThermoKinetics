@@ -497,10 +497,17 @@ What the paper specifies, and what the implementation follows:
 
 What the paper **does not** specify (it cites other work), and the plan for it.
 
-**Companion reference for routing and compaction** (the paper's [14]):
+The other phases, and the compaction solver, come from the paper's references, all now in `_reference/graphing/`:
 
-> T. Lengauer, *Combinatorial Algorithms for Integrated Circuit Layout*, Wiley–Teubner (Applicable Theory in Computer Science), 1990/1992.
-> Local copy, **not in git** (copyrighted book, D-25): `_reference/graphing/(Applicable Theory in Computer Science) Thomas Lengauer (auth.) - Combinatorial Algorithms for Integrated Circuit Layout-Vieweg+Teubner Verlag (1992).pdf` (714 PDF pages; **PDF page = printed page + 18**).
+| Ref. | Paper | File | Used for |
+|---|---|---|---|
+| [10] | K. Freivalds, P. Kikusts, *Optimum Layout Adjustment Supporting Ordering Constraints in Graph-Like Diagram Drawing*, Proc. Latvian Academy of Sciences B, 2001 (12 pp.) | `layopt.pdf` | **normalization** (the third phase): segment-based QP with obstacle-graph ordering constraints; the solver the authors used for eq. (3) |
+| — | T. Dwyer, Y. Koren, K. Marriott, *IPSep-CoLa: An Incremental Procedure for Separation Constraint Layout of Graphs*, IEEE TVCG 12(5), 2006 (8 pp.) | `An Incremental Procedure for.pdf` | **the QP solver**: `solve_QPSC`, gradient projection (Fig. 8) with block merge/split projection and Lagrange multipliers (Fig. 9) |
+| [7] | T. Dwyer, K. Marriott, P. J. Stuckey, *Fast Node Overlap Removal*, GD 2005, LNCS 3843, pp. 153–164 (12 pp.) | `Fast node overlap removal.pdf` | **non-overlap constraints**: O(n log n) scan-line generation (`generate_Cxno`, `generate_Cyno`, Fig. 1); `satisfy_VPSC` / `solve_VPSC` |
+| [3] | T. C. Biedl, B. P. Madden, I. G. Tollis, *The Three-Phase Method: A Unified Approach to Orthogonal Graph Drawing*, IJCGA 10(6), 2000, pp. 553–580 (journal version of the GD 1997 paper; 28 pp.) | `biedl2000.pdf` | **port assignment** (§3.3): ordering the edges on each side of a box (right side clockwise, left side counter-clockwise); the non-overlapping-trees conditions |
+| [14] | T. Lengauer, *Combinatorial Algorithms for Integrated Circuit Layout*, 1990/1992 (book) | see below (local only) | **edge routing**: maze running, track graph, bend minimization |
+
+**Lengauer** (the paper's [14]). Local copy, **not in git** (copyrighted book, D-25): `_reference/graphing/(Applicable Theory in Computer Science) Thomas Lengauer (auth.) - Combinatorial Algorithms for Integrated Circuit Layout-Vieweg+Teubner Verlag (1992).pdf` (714 PDF pages; **PDF page = printed page + 18**).
 
 | Need | Lengauer section | Printed pages (PDF pages) |
 |---|---|---|
@@ -509,29 +516,34 @@ What the paper **does not** specify (it cites other work), and the plan for it.
 | Line searching (Hightower, Mikami–Tabuchi) and the **track graph**: few-bend routes without a full grid | §8.4.2 | 400–409 (418–427) |
 | **Minimizing bends** via the edge-cost transformation of Fig. 8.12 (Dijkstra on an expanded grid) | §8.4.4 | 411–413 (429–431) |
 | Sequential routing of many nets (order, rip-up ideas) | §8.3–8.4 | 392–413 (410–431) |
-| Graph-based 1-D compaction (constraint graph, longest paths), **wire balancing** (minimize wire length subject to spacing) | §10.2.2, §10.2.2.3 | 596–619 (614–637) |
-| Quadratic optimization, gradient projection (for the eq. (3) QP) | §4.8.1, §4.8.3 | 204–210 (222–228) |
+| Graph-based 1-D compaction (constraint graph, longest paths), **wire balancing** | §10.2.2, §10.2.2.3 | 596–619 (614–637) |
+| Quadratic optimization, gradient projection (background to the QP solver) | §4.8.1, §4.8.3 | 204–210 (222–228) |
 | Simulated annealing and cooling schedules (background to Algorithm 1) | §4.3 | 144–160 (162–178) |
 
 The plan, by phase:
-- **Edge routing** (Lengauer §8.4):
-  - Route each port edge as a shortest orthogonal path on the grid left free by the placed boxes, with the bend-cost transformation of §8.4.4 (Fig. 8.12) so that length plus a bend penalty is minimized exactly by Dijkstra.
-  - Use goal-directed search (§3.8.5.1) for speed.
-  - If grids get large, switch to the track graph of §8.4.2.3.
-  - Edges sharing a node side get spread ports.
-- **Normalization / overlap removal** (the paper's [7] Dwyer–Marriott–Stuckey and [10] Freivalds–Kikusts; neither is in `_reference/`):
-  - reuse the compaction machinery, a 1-D quadratic objective with separation constraints, to push apart overlapping segments and nodes while minimizing movement;
-  - Lengauer's graph-based compaction (§10.2.2) gives the constraint-graph construction.
-- **The QP solver for eq. (3)** (the paper's [10], not in `_reference/`). The constraints are pure difference constraints z_j − z_i ≥ d_ij, and the objective is a graph Laplacian plus small regularization. Options:
-  - (a) a small gradient-projection / active-set solver (Lengauer §4.8.1, §4.8.3) whose projection step is the block-merging separation-constraint projection;
-  - (b) a general QP solver.
-  - Decide at implementation time and log it in DECISIONS.
+1. **Node placement:** Freivalds–Glagoļevs Algorithm 1 (above). This is the required core.
+2. **Compaction inside node placement** (eq. (3)): build the visibility graph from the grid, then solve with **IPSep-CoLa's `solve_QPSC`**:
+   - repeat: a steepest-descent step with exact line search (step s = gᵀg / gᵀAg); `project` onto the separation constraints by merging blocks along violated constraints and expanding a block at its smallest-Lagrange-multiplier active constraint; then a second step β = argmin over [0, 1];
+   - then `split_blocks` wherever a Lagrange multiplier is negative;
+   - until the step is small and nothing split.
 
-**Still missing from `_reference/graphing/`** (the plans above work without them; they would sharpen the overlap-removal and QP steps):
-- T. Dwyer, K. Marriott, P. J. Stuckey, *Fast Node Overlap Removal*, Graph Drawing 2005, LNCS 3843, pp. 153–164 (the paper's [7]): the separation-constraint (VPSC) solver.
-- T. Dwyer, Y. Koren, K. Marriott, *IPSep-CoLa: An Incremental Procedure for Separation Constraint Layout of Graphs*, IEEE TVCG 12(5), 2006: gradient projection with separation constraints, which is the closest published match to solving eq. (3).
-- K. Freivalds, P. Kikusts, *Optimum Layout Adjustment Supporting Ordering Constraints*, Proc. Latvian Academy of Sciences B, 2001 (the paper's [10]): the solver the authors used. It may be hard to obtain; the two papers above cover the same ground.
-- *Optional:* T. C. Biedl, B. P. Madden, I. G. Tollis, *The Three-Phase Method: A Unified Approach to Orthogonal Graph Drawing*, GD 1997 (the paper's [3]): the phase structure and port assignment the paper builds on.
+   A is the Laplacian of the drawn edges (eq. (3)) plus a small diagonal regularization, so the problem is strictly convex. This is the same algorithm as Freivalds–Kikusts' rigid-component shift/merge with a spanning-tree cut, so it is the solver the layout paper used. It replaces option (b), a generic QP (D-28).
+3. **Edge routing** (Lengauer §8.4):
+   - a shortest orthogonal route per port edge on the grid left free by the boxes, with the bend-cost transformation of §8.4.4 (Fig. 8.12), so that length plus a bend penalty is minimized exactly by Dijkstra;
+   - goal-directed search (§3.8.5.1) for speed;
+   - the track graph (§8.4.2.3) if grids get large.
+4. **Port assignment** (Biedl et al. §3.3): spread the edges that share a box side over distinct ports, ordering them by where their routes go (clockwise on the right, counter-clockwise on the left, and likewise for top and bottom) to avoid crossings at the box. Add grid lines where a side has more edges than ports.
+5. **Normalization** (Freivalds–Kikusts; Fig. 1(c) of the layout paper):
+   - one coordinate per *segment*, meaning box sides and every route segment, one direction at a time;
+   - ordering constraints from the segment obstacle (visibility) graph, plus minimum box size and the gap δ;
+   - objective: node drift Σ ((x_l + x_r)/2 − x_c)² plus w Σ (x_r − x_l)², with w = 10 as the paper suggests;
+   - solved with the same `solve_QPSC`; vertical segments first, then horizontal.
+
+   This also separates overlapping route segments from different edges. Box-only overlap constraints for the node stage come from the Dwyer–Marriott–Stuckey scan line (`generate_Cxno`, `generate_Cyno`), which gives O(n) constraints in O(n log n).
+
+**Solver tests (when implemented):**
+- **Separation-constraint QP:** every constraint is satisfied, the KKT conditions hold (active multipliers ≥ 0, the gradient is balanced by the active constraints), and the result matches small problems solved by hand.
+- **`project` alone:** it is exactly the VPSC least-squares projection of Dwyer–Marriott–Stuckey.
 
 ### 17.2 What gets drawn
 
