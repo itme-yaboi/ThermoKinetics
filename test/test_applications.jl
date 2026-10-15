@@ -118,3 +118,68 @@ end
         @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10 && cl.charge_rel <= 1e-10
     end
 end
+
+@testset "applications: control volume" begin
+    N2 = gas_n2()
+    cp = N2.cv + N2.R
+
+    @testset "adiabatic tank blowdown: the gas left behind expands isentropically" begin
+        T0, p0, V, p_atm = 400.0, 5e5, 1e-2, 1e5
+        sys = ThermoSystem()
+        tank = add!(sys, Body(:tank, N2; T = T0, p = p0, V))
+        atm = add!(sys, Reservoir(:atm; T = 300.0, p = p_atm, material = N2))
+        valve = connect!(sys, Stream(HydraulicConductance(2e-8)), tank, atm)
+        cs = compile(sys)
+        sol = simulate(cs, (0.0, 300.0); saveat = 5.0)
+        for u in sol.u
+            p = pressure(cs, u, tank)
+            @test temperature(cs, u, tank) ≈ T0 * (p / p0)^(N2.R / cp) rtol = 1e-7
+        end
+        @test pressure(cs, sol.u[end], tank) ≈ p_atm rtol = 1e-6
+        # all the irreversibility (throttling + mixing) is booked where the jet ends: at the atmosphere
+        @test generated_entropy(cs, sol.u[end])[valve] > 0
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9 && cl.charge_rel <= 1e-10
+    end
+
+    @testset "counter-flow heat exchanger vs ε–NTU (first-order convergence)" begin
+        Th_in, Tc_in = 400.0, 300.0
+        mh, mc = 1.0e-3, 1.5e-3
+        Ch, Cc = mh * cp, mc * cp
+        Cmin, Cr = min(Ch, Cc), min(Ch, Cc) / max(Ch, Cc)
+        NTU = 2.0
+        UA = NTU * Cmin
+        ε_exact = (1 - exp(-NTU * (1 - Cr))) / (1 - Cr * exp(-NTU * (1 - Cr)))
+        function exchanger(N)
+            sys = ThermoSystem()
+            hot = [add!(sys, Body(Symbol(:h, i), N2; T = Th_in, p = 1.05e5, V = 1e-4)) for i in 1:N]
+            cold = [add!(sys, Body(Symbol(:c, i), N2; T = Tc_in, p = 1.05e5, V = 1e-4)) for i in 1:N]
+            connect!(sys, FlowBoundary(N2; T = Th_in, p = 1.2e5, mdot = t -> mh, supply = :passive), hot[1])
+            connect!(sys, FlowBoundary(N2; T = Tc_in, p = 1.2e5, mdot = t -> mc, supply = :passive), cold[1])
+            for i in 1:N-1
+                connect!(sys, Stream(HydraulicConductance(1e-5)), hot[i], hot[i+1])
+                connect!(sys, Stream(HydraulicConductance(1e-5)), cold[i], cold[i+1])
+            end
+            connect!(sys, PassThroughOutlet(κ = 1e-6, p_out = 1e5), hot[N])
+            connect!(sys, PassThroughOutlet(κ = 1e-6, p_out = 1e5), cold[N])
+            for i in 1:N                                 # counter-flow: hot cell i faces cold cell N + 1 − i
+                connect!(sys, Conductor(ThermalConductance(UA / N)), hot[i], cold[N+1-i])
+            end
+            cs = compile(sys)
+            u = steady_state(cs; u0 = simulate(cs, (0.0, 50.0)).u[end])     # transient warm start
+            Th_out, Tc_out = temperature(cs, u, hot[N]), temperature(cs, u, cold[N])
+            @test Ch * (Th_in - Th_out) ≈ Cc * (Tc_out - Tc_in) rtol = 1e-8  # energy balance
+            # loss attribution: total production = Σ ṁ (s_out − s_in) of the two streams
+            p_h, p_c = pressure(cs, u, hot[N]), pressure(cs, u, cold[N])
+            S_expected = mh * (cp * log(Th_out / Th_in) - N2.R * log(p_h / 1.2e5)) +
+                         mc * (cp * log(Tc_out / Tc_in) - N2.R * log(p_c / 1.2e5))
+            @test sum(values(entropy_production(cs, u))) ≈ S_expected rtol = 1e-7
+            return Ch * (Th_in - Th_out) / (Cmin * (Th_in - Tc_in))
+        end
+        ε10, ε20 = exchanger(10), exchanger(20)
+        # well-mixed cells converge at first order: the error halves when N doubles …
+        @test 1.8 < (ε_exact - ε10) / (ε_exact - ε20) < 2.2
+        # … so the Richardson extrapolation recovers ε–NTU (measured: 1.1e-3)
+        @test abs((2ε20 - ε10) - ε_exact) < 2e-3
+    end
+end

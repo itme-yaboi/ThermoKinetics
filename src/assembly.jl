@@ -1,8 +1,8 @@
 # Compilation and the assembler (DESIGN §4.2, §5.1, §10, §11).
 #
-# Laws map forces to fluxes (`thermal_transfer`, `fluxes`); heat kernels decide where the
-# released power goes (`distribute_heat`); `_apply!` (the bookkeeping side) is the only code
-# that writes state derivatives. It moves every non-thermal charge out of one port and into
+# Laws map forces to fluxes (`thermal_transfer`, `fluxes`, flow drivers); heat kernels decide
+# where the released power goes (`distribute_heat`); `_apply!` (the bookkeeping side) is the
+# only code that writes state derivatives. It moves every non-thermal charge out of one port and into
 # the other, turns every heat delivery into entropy at the receiving node's own temperature,
 # and books the same terms into the ledgers.
 
@@ -127,23 +127,71 @@ struct CompiledConductor{L<:ConductorLaw,K,N}
     led::Int                        # du index of the first ledger slot
 end
 
+"A stream's species rows at both ends: force index of μ, charge target, reservoir y index."
+struct CompiledStream{D,N}
+    name::Symbol
+    driver::D
+    a::Int; b::Int
+    pa::Int; pb::Int                # force index of −p at each end
+    fa::NTuple{N,Int}; fb::NTuple{N,Int}
+    ca::NTuple{N,Int}; cb::NTuple{N,Int}
+    ya::NTuple{N,Int}; yb::NTuple{N,Int}
+    led::Int                        # Ṡ_gen
+end
+
+struct CompiledPump{F,M,N}
+    name::Symbol
+    mdot::F
+    mat::M                          # the upstream fluid (for the isentropic delivered state)
+    a::Int; b::Int
+    pb::Int
+    fa::NTuple{N,Int}; fb::NTuple{N,Int}
+    ca::NTuple{N,Int}; cb::NTuple{N,Int}
+    ya::NTuple{N,Int}
+    led::Int                        # Ṡ_gen, then external work
+end
+
+struct CompiledBoundary{F,M,N}
+    name::Symbol
+    mdot::F
+    mat::M
+    pumped::Bool
+    T_in::Float64; p_in::Float64; s_in::Float64
+    μ_in::NTuple{N,Float64}; y::NTuple{N,Float64}
+    d::Int; pd::Int
+    fd::NTuple{N,Int}; cd::NTuple{N,Int}
+    led::Int                        # Ṡ_gen, work, received m_1..m_N, S, U
+end
+
+struct CompiledOutlet{O,N}
+    name::Symbol
+    outlet::O
+    u::Int; pu::Int
+    fu::NTuple{N,Int}; cu::NTuple{N,Int}
+    led::Int                        # received m_1..m_N, S, U
+end
+
 """
     CompiledSystem
 
 Flat, type-stable lowering of a `ThermoSystem`. State layout: `u = [u_phys; q_ledger]`.
-`u_phys` holds the bodies' charges. `q_ledger` holds, in order:
-- each conductor's integrated entropy production (two slots for kernel B: dissipation and
-  conduction);
-- for each reservoir, the charge it received in each of its domains (entropy for
-  `Thermal`), then the energy it received.
+`u_phys` holds the bodies' charges. `q_ledger` holds, element by element in insertion order:
+- conductors: entropy production (two slots for kernel B: dissipation and conduction);
+- streams: production;
+- pumps: production, then external work supplied;
+- flow boundaries: production, work, and the mass of each species, entropy and energy
+  *received* (negative: they supply);
+- outlets: mass of each species, entropy and energy received.
 
-Ledgers never feed back into the dynamics (D-10). Forces live in a buffer aligned with the
-state, `P[1:nphys]` (bodies), followed by the reservoirs' fixed forces.
+Then, for each reservoir: the charge received in each of its domains (entropy for
+`Thermal`), then energy. Ledgers never feed back into the dynamics (D-10). Forces live in a
+buffer aligned with the state: `P[1:nphys]` are the bodies' forces, followed by the
+reservoirs' fixed forces.
 """
-struct CompiledSystem{BG<:Tuple,CG<:Tuple}
+struct CompiledSystem
     sys::ThermoSystem
-    body_groups::BG
-    conductor_groups::CG
+    body_groups::Vector{Any}       # concretely typed vectors, one per body type (function barrier)
+    element_groups::Vector{Any}    # likewise per element type
     # bodies
     body_names::Vector{Symbol}
     bodies::Vector{Body}
@@ -151,19 +199,25 @@ struct CompiledSystem{BG<:Tuple,CG<:Tuple}
     # reservoirs
     reservoir_names::Vector{Symbol}
     reservoirs::Vector{Reservoir}
-    res_force::Vector{Float64}          # P[nphys+1:end]
-    res_led::Vector{Int}                # du index of the first ledger slot of each reservoir
+    res_force::Vector{Float64}
+    res_led::Vector{Int}
     # per node (bodies then reservoirs)
-    node_T::Vector{Int}                 # force-buffer index of T (0: no thermal DOF)
+    node_T::Vector{Int}                 # force index of T (0: no thermal DOF)
     node_S::Vector{Int}                 # du index receiving entropy (0: none)
-    node_U::Vector{Int}                 # du index of the reservoir energy ledger (0 for bodies)
-    # conductors
+    node_U::Vector{Int}                 # du index of a reservoir's energy ledger (0 for bodies)
+    # elements
+    element_names::Vector{Symbol}
+    element_ref::Dict{Symbol,Tuple{Int,Int}}
     conductor_names::Vector{Symbol}
-    conductor_ref::Vector{Tuple{Int,Int}}
-    conductor_led::Vector{UnitRange{Int}}
+    prod_led::Dict{Symbol,UnitRange{Int}}             # Ṡ_gen slots of every producing element
+    work_led::Dict{Symbol,Int}                         # external work of pumps and boundaries
+    bound_led::Dict{Symbol,NamedTuple{(:m, :S, :U),Tuple{UnitRange{Int},Int,Int}}}
+    ext_charges::Vector{Tuple{FormOfMotion,Int}}       # boundary/outlet received charges
+    touch::Vector{Tuple{Vector{Int},UnitRange{Int}}}   # per element: nodes, ledger slots (sparsity)
+    moves::Vector{Tuple{Vector{Int},Vector{FormOfMotion},Bool}}  # per element: nodes, charges moved, is boundary
+    active::Vector{Int}                                # physical slots some element writes
     # lookup and sizes
     node_index::Dict{Symbol,Int}
-    conductor_index::Dict{Symbol,Int}
     nphys::Int
     nledger::Int
     u0::Vector{Float64}
@@ -176,18 +230,20 @@ nnodes(cs::CompiledSystem) = length(cs.body_names) + length(cs.reservoir_names)
 body_names(cs::CompiledSystem) = copy(cs.body_names)
 reservoir_names(cs::CompiledSystem) = copy(cs.reservoir_names)
 conductor_names(cs::CompiledSystem) = copy(cs.conductor_names)
+element_names(cs::CompiledSystem) = copy(cs.element_names)
 
 """
-Group a vector into a tuple of concretely typed vectors, one per concrete element type.
-Groups are sorted by type name, so models with the same element types share one compiled
-`CompiledSystem` type (and one compiled solver) whatever order they were built in.
+Group a vector into concretely typed vectors, one per concrete element type, held in a
+`Vector{Any}`. Each group's loop is specialized (one dynamic dispatch per group per call, a
+function barrier), while `CompiledSystem` keeps a single concrete type. So every model shares
+one compiled right-hand side and one compiled solver (D-26).
 """
 function _group_by_type(items::AbstractVector)
     types = sort(unique(map(typeof, items)); by = string)
-    return Tuple(Vector{T}([x for x in items if typeof(x) === T]) for T in types)
+    return Any[Vector{T}([x for x in items if typeof(x) === T]) for T in types]
 end
 
-function _compile_kernel(el::Conductor, has_h::Bool)
+function _compile_kernel(el::Conductor)
     pol = el.dissipation
     pol === nothing && return ThermalRow()
     pol isa Split && return WeightsPolicy(1 - pol.w, pol.w, 0.0)
@@ -195,6 +251,12 @@ function _compile_kernel(el::Conductor, has_h::Bool)
     pol isa InternalNode && return NodePolicy(pol.G_a, pol.G_b, pol.G_h)
     error("unknown dissipation policy $(typeof(pol))")
 end
+
+_nledger(el::Conductor) = nledger(_compile_kernel(el))
+_nledger(::Stream) = 1
+_nledger(::IdealPump) = 2
+_nledger(el::FlowBoundary) = 2 + length(mass_slots(el.material)) + 2
+_nledger(el::PassThroughOutlet, nspecies::Int) = nspecies + 2
 
 """
     compile(sys) -> CompiledSystem
@@ -209,6 +271,7 @@ function compile(sys::ThermoSystem)
     node_index = Dict{Symbol,Int}()
     for (i, n) in enumerate(body_labels); node_index[n] = i; end
     for (j, n) in enumerate(res_labels); node_index[n] = nb + j; end
+    node_obj(i) = i <= nb ? g[body_labels[i]] : g[res_labels[i-nb]]
 
     # bodies: state layout (force slots coincide with charge slots)
     slots = BodySlot[]
@@ -222,7 +285,6 @@ function compile(sys::ThermoSystem)
     end
     nphys = off - 1
 
-    # reservoir forces follow the body forces in the force buffer
     reservoirs = Reservoir[g[n] for n in res_labels]
     res_fstart = Int[]
     res_force = Float64[]
@@ -231,18 +293,25 @@ function compile(sys::ThermoSystem)
         append!(res_force, r.forces)
     end
 
-    # conductors: ledger layout first, then reservoir ledgers
-    cond_labels = [e for e in sys.elements if g[e] isa Conductor]
-    kernels = Any[]
+    # per-node lookup
+    ndoms(i) = i <= nb ? collect(FormOfMotion, domains(slots[i].body)) : reservoirs[i-nb].domains
+    function force_index(i::Int, d::FormOfMotion)
+        k = findfirst(==(d), ndoms(i))
+        k === nothing && return 0
+        return i <= nb ? body_offset[i] + k - 1 : res_fstart[i-nb] + k - 1
+    end
+    species_of(i) = [d for d in ndoms(i) if d isa Species]
+    yindex(i, d) = i <= nb ? 0 : findfirst(==(d), species_of(i))
+
+    # ledger layout, element by element in insertion order, then reservoirs
+    elem_labels = copy(sys.elements)
     led = nphys + 1
-    conductor_led = UnitRange{Int}[]
-    for e in cond_labels
+    elem_led = Dict{Symbol,UnitRange{Int}}()
+    for e in elem_labels
         el = g[e]
-        has_h = any(nb_ -> g[e, nb_].role == :h, neighbor_labels(g, e))
-        k = _compile_kernel(el, has_h)
-        push!(kernels, k)
-        push!(conductor_led, led:led+nledger(k)-1)
-        led += nledger(k)
+        n = el isa PassThroughOutlet ? _nledger(el, length(species_of(node_index[port_node(sys, e, :a)]))) : _nledger(el)
+        elem_led[e] = led:led+n-1
+        led += n
     end
     res_led = Int[]
     for r in reservoirs
@@ -251,62 +320,152 @@ function compile(sys::ThermoSystem)
     end
     nledger_total = led - 1 - nphys
 
-    # per-node lookup: force index and du target for each domain
-    function force_index(i::Int, d::FormOfMotion)
-        if i <= nb
-            k = findfirst(==(d), collect(domains(slots[i].body)))
-            return k === nothing ? 0 : body_offset[i] + k - 1
-        else
-            k = findfirst(==(d), reservoirs[i-nb].domains)
-            return k === nothing ? 0 : res_fstart[i-nb] + k - 1
-        end
-    end
     function charge_target(i::Int, d::FormOfMotion)
-        if i <= nb
-            return force_index(i, d)                 # same slot as the charge
-        else
-            k = findfirst(==(d), reservoirs[i-nb].domains)
-            return k === nothing ? 0 : res_led[i-nb] + k - 1
-        end
+        i <= nb && return force_index(i, d)                  # a body's charge slot
+        k = findfirst(==(d), reservoirs[i-nb].domains)
+        return k === nothing ? 0 : res_led[i-nb] + k - 1
     end
     node_T = [force_index(i, Thermal()) for i in 1:nb+nr]
     node_S = [charge_target(i, Thermal()) for i in 1:nb+nr]
     node_U = [i <= nb ? 0 : res_led[i-nb] + length(reservoirs[i-nb].domains) for i in 1:nb+nr]
 
-    compiled = CompiledConductor[]
-    for (k, e) in enumerate(cond_labels)
+    compiled = Any[]
+    conductor_labels = Symbol[]
+    prod_led = Dict{Symbol,UnitRange{Int}}()
+    work_led = Dict{Symbol,Int}()
+    bound_led = Dict{Symbol,NamedTuple{(:m, :S, :U),Tuple{UnitRange{Int},Int,Int}}}()
+    ext_charges = Tuple{FormOfMotion,Int}[]
+    touch = Tuple{Vector{Int},UnitRange{Int}}[]
+    moves = Tuple{Vector{Int},Vector{FormOfMotion},Bool}[]
+    active_set = Set{Int}()
+    mark_active!(targets) = foreach(t -> (0 < t <= nphys && push!(active_set, t)), targets)
+
+    function fluid_node(e, i, label)
+        node = node_obj(i)
+        for d in (Thermal(), Volumetric())
+            force_index(i, d) == 0 && throw(ArgumentError(":$e needs a fluid at :$label, which has no $d form of motion"))
+        end
+        isempty(species_of(i)) && throw(ArgumentError(":$e needs a fluid at :$label, which has no species (mass) charge"))
+        node isa Reservoir && node.material === nothing &&
+            throw(ArgumentError(":$e: reservoir :$label must carry a material (Reservoir(…; material = …)) to exchange fluid"))
+        return nothing
+    end
+    function same_species(e, i, j, li, lj)
+        Set(species_of(i)) == Set(species_of(j)) ||
+            throw(ArgumentError(":$e joins :$li and :$lj, whose species differ ($(species_of(i)) vs $(species_of(j)))"))
+        return nothing
+    end
+
+    for e in elem_labels
         el = g[e]
-        a, b = port_node(sys, e, :a), port_node(sys, e, :b)
-        hl = third_node(el.dissipation)
-        ia, ib = node_index[a], node_index[b]
-        ih = hl === nothing ? 0 : node_index[hl]
-        # internal isolation (n ≤ m): every conducted domain must exist on both ends
-        for d in domains(el), (n, i) in ((a, ia), (b, ib))
-            force_index(i, d) == 0 &&
-                throw(ArgumentError("conductor :$e conducts $d, but :$n has no such form of motion"))
-        end
-        # heat may only be delivered to thermal nodes
-        kern = kernels[k]
-        if !(kern isa ThermalRow)
-            for (on, n, i) in zip(active(kern), (a, b, hl), (ia, ib, ih))
-                on && node_T[i] == 0 &&
-                    throw(ArgumentError("conductor :$e sends friction heat to :$n, which has no thermal form of motion"))
+        r = elem_led[e]
+        if el isa Conductor
+            a, b = port_node(sys, e, :a), port_node(sys, e, :b)
+            hl = third_node(el.dissipation)
+            ia, ib = node_index[a], node_index[b]
+            ih = hl === nothing ? 0 : node_index[hl]
+            for d in domains(el), (n, i) in ((a, ia), (b, ib))
+                force_index(i, d) == 0 &&
+                    throw(ArgumentError("conductor :$e conducts $d, but :$n has no such form of motion"))
             end
+            kern = _compile_kernel(el)
+            if !(kern isa ThermalRow)
+                for (on, n, i) in zip(active(kern), (a, b, hl), (ia, ib, ih))
+                    on && node_T[i] == 0 &&
+                        throw(ArgumentError("conductor :$e sends friction heat to :$n, which has no thermal form of motion"))
+                end
+            end
+            rows = nonthermal_domains(el.law)
+            N = length(rows)
+            c = CompiledConductor(e, el.law, kern, ia, ib, ih,
+                                  ntuple(k -> force_index(ia, rows[k]), N), ntuple(k -> force_index(ib, rows[k]), N),
+                                  ntuple(k -> charge_target(ia, rows[k]), N), ntuple(k -> charge_target(ib, rows[k]), N),
+                                  first(r))
+            push!(compiled, c); push!(conductor_labels, e)
+            prod_led[e] = r
+            nodes = [i for i in (ia, ib, ih) if i != 0]
+            push!(touch, (nodes, r))
+            push!(moves, ([ia, ib], collect(FormOfMotion, rows), false))
+            mark_active!(c.ca); mark_active!(c.cb)
+            heated = kern isa ThermalRow ? (ia, ib) : Tuple(i for (on, i) in zip(active(kern), (ia, ib, ih)) if on)
+            mark_active!(node_S[i] for i in heated)
+        elseif el isa Union{Stream,IdealPump}
+            a, b = port_node(sys, e, :a), port_node(sys, e, :b)
+            ia, ib = node_index[a], node_index[b]
+            fluid_node(e, ia, a); fluid_node(e, ib, b); same_species(e, ia, ib, a, b)
+            sp = species_of(ia)
+            N = length(sp)
+            fa, fb = ntuple(k -> force_index(ia, sp[k]), N), ntuple(k -> force_index(ib, sp[k]), N)
+            ca, cb = ntuple(k -> charge_target(ia, sp[k]), N), ntuple(k -> charge_target(ib, sp[k]), N)
+            ya = ntuple(k -> yindex(ia, sp[k]), N)
+            if el isa Stream
+                c = CompiledStream(e, el.driver, ia, ib, force_index(ia, Volumetric()), force_index(ib, Volumetric()),
+                                   fa, fb, ca, cb, ya, ntuple(k -> yindex(ib, sp[k]), N), first(r))
+            else
+                N == 1 || throw(ArgumentError("ideal pump :$e: single-species fluids only (for now)"))
+                up = node_obj(ia)
+                mat = up isa Body ? up.material : up.material
+                c = CompiledPump(e, el.mdot, mat, ia, ib, force_index(ib, Volumetric()), fa, fb, ca, cb, ya, first(r))
+                work_led[e] = first(r) + 1
+            end
+            push!(compiled, c)
+            prod_led[e] = first(r):first(r)
+            push!(touch, ([ia, ib], r))
+            push!(moves, ([ia, ib], collect(FormOfMotion, sp), false))
+            mark_active!(ca); mark_active!(cb); mark_active!((node_S[ia], node_S[ib]))
+        elseif el isa FlowBoundary
+            d = port_node(sys, e, :a)
+            id = node_index[d]
+            id <= nb || throw(ArgumentError("flow boundary :$e must feed a body, not a reservoir"))
+            fluid_node(e, id, d)
+            msp = [dd for dd in domains(el.material) if dd isa Species]
+            Set(msp) == Set(species_of(id)) ||
+                throw(ArgumentError("flow boundary :$e supplies $msp, but :$d holds $(species_of(id))"))
+            N = length(msp)
+            N == 1 || throw(ArgumentError("flow boundary :$e: single-species fluids only (for now)"))
+            E = charges_at(el.material; T = el.T, p = el.p, m = 1.0)
+            F = forces(el.material, E)
+            ms = mass_slots(el.material)
+            mtot = sum(E[i] for i in ms)
+            c = CompiledBoundary(e, el.mdot, el.material, el.supply === :pumped, el.T, el.p,
+                                 E[thermal_slot(el.material)] / mtot,
+                                 ntuple(k -> F[ms[k]], N), ntuple(k -> E[ms[k]] / mtot, N),
+                                 id, force_index(id, Volumetric()),
+                                 ntuple(k -> force_index(id, msp[k]), N), ntuple(k -> charge_target(id, msp[k]), N),
+                                 first(r))
+            push!(compiled, c)
+            prod_led[e] = first(r):first(r)
+            work_led[e] = first(r) + 1
+            bound_led[e] = (m = first(r)+2:first(r)+1+N, S = first(r) + 2 + N, U = first(r) + 3 + N)
+            for k in 1:N; push!(ext_charges, (msp[k], first(r) + 1 + k)); end
+            push!(touch, ([id], r))
+            push!(moves, ([id], collect(FormOfMotion, msp), true))
+            mark_active!(c.cd); mark_active!((node_S[id],))
+        elseif el isa PassThroughOutlet
+            uu = port_node(sys, e, :a)
+            iu = node_index[uu]
+            iu <= nb || throw(ArgumentError("outlet :$e must drain a body, not a reservoir"))
+            fluid_node(e, iu, uu)
+            sp = species_of(iu)
+            N = length(sp)
+            c = CompiledOutlet(e, el, iu, force_index(iu, Volumetric()),
+                               ntuple(k -> force_index(iu, sp[k]), N), ntuple(k -> charge_target(iu, sp[k]), N), first(r))
+            push!(compiled, c)
+            bound_led[e] = (m = first(r):first(r)+N-1, S = first(r) + N, U = first(r) + N + 1)
+            for k in 1:N; push!(ext_charges, (sp[k], first(r) + k - 1)); end
+            push!(touch, ([iu], r))
+            push!(moves, ([iu], collect(FormOfMotion, sp), true))
+            mark_active!(c.cu); mark_active!((node_S[iu],))
+        else
+            error("unsupported element $(typeof(el))")
         end
-        rows = nonthermal_domains(el.law)
-        N = length(rows)
-        push!(compiled, CompiledConductor(e, el.law, kern, ia, ib, ih,
-                                          ntuple(r -> force_index(ia, rows[r]), N), ntuple(r -> force_index(ib, rows[r]), N),
-                                          ntuple(r -> charge_target(ia, rows[r]), N), ntuple(r -> charge_target(ib, rows[r]), N),
-                                          first(conductor_led[k])))
     end
 
     body_groups = _group_by_type([s for s in slots])
-    conductor_groups = _group_by_type([c for c in compiled])
-    conductor_ref = Vector{Tuple{Int,Int}}(undef, length(cond_labels))
-    cidx = Dict(e => k for (k, e) in enumerate(cond_labels))
-    for (gi, grp) in enumerate(conductor_groups), (pos, c) in enumerate(grp)
-        conductor_ref[cidx[c.name]] = (gi, pos)
+    element_groups = _group_by_type([c for c in compiled])
+    element_ref = Dict{Symbol,Tuple{Int,Int}}()
+    for (gi, grp) in enumerate(element_groups), (pos, c) in enumerate(grp)
+        element_ref[c.name] = (gi, pos)
     end
 
     u0 = zeros(nphys + nledger_total)
@@ -315,12 +474,13 @@ function compile(sys::ThermoSystem)
     end
     Pbuf = vcat(zeros(nphys), res_force)
 
-    return CompiledSystem(sys, body_groups, conductor_groups,
+    return CompiledSystem(sys, body_groups, element_groups,
                           body_labels, Body[g[n] for n in body_labels], body_offset,
                           res_labels, reservoirs, res_force, res_led,
                           node_T, node_S, node_U,
-                          cond_labels, conductor_ref, conductor_led,
-                          node_index, cidx, nphys, nledger_total, u0, Pbuf)
+                          elem_labels, element_ref, conductor_labels, prod_led, work_led, bound_led, ext_charges,
+                          touch, moves, sort(collect(active_set)),
+                          node_index, nphys, nledger_total, u0, Pbuf)
 end
 
 # --- the right-hand side ------------------------------------------------------------------------
@@ -346,11 +506,13 @@ function force_buffer(cs::CompiledSystem, u::AbstractVector)
     for j in eachindex(cs.res_force)
         P[cs.nphys+j] = cs.res_force[j]
     end
-    foreach(grp -> _body_forces!(P, grp, u), cs.body_groups)
+    for grp in cs.body_groups
+        _body_forces!(P, grp, u)
+    end
     return P
 end
 
-@inline _node_T(P, cs::CompiledSystem, i::Int) = (k = cs.node_T[i]; k == 0 ? oftype(P[1] + 0.0, NaN) : P[k])
+@inline _node_T(P, cs::CompiledSystem, i::Int) = (k = cs.node_T[i]; k == 0 ? convert(eltype(P), NaN) : P[k])
 
 "Deliver heat `Q` [W] to node `i` at temperature `T`: entropy Q/T, plus the reservoir energy ledger."
 @inline function _heat!(du, cs::CompiledSystem, i::Int, Q, T)
@@ -359,13 +521,32 @@ end
     return nothing
 end
 
-"""
-    transfer(c, P, cs) -> NamedTuple
+"Move charge `J` into node `i` (target `t`) at its force `μ`; a reservoir also books the energy μJ."
+@inline function _charge!(du, cs::CompiledSystem, i::Int, t::Int, J, μ)
+    @inbounds du[t] += J
+    @inbounds cs.node_U[i] == 0 || (du[cs.node_U[i]] += μ * J)
+    return nothing
+end
 
-Evaluate one conductor at force buffer `P`: fluxes, released power, heat deliveries and
-production. Pure; used by both the assembler and the `flux` accessor.
+"Specific entropy and mass fractions of the fluid at node `i` (the upstream state)."
+@inline function _upstream(cs::CompiledSystem, u, i::Int, c::NTuple{N,Int}, yi::NTuple{N,Int}) where {N}
+    Tel = promote_type(eltype(u), Float64)
+    if i <= nbodies(cs)
+        m = sum(ntuple(k -> u[c[k]], Val(N)))
+        return (convert(Tel, u[cs.node_S[i]] / m), ntuple(k -> convert(Tel, u[c[k]] / m), Val(N)))
+    else
+        r = cs.reservoirs[i-nbodies(cs)]
+        return (convert(Tel, r.s), ntuple(k -> convert(Tel, r.y[yi[k]]), Val(N)))
+    end
+end
+
 """
-function transfer(c::CompiledConductor{<:ConductorLaw,ThermalRow,0}, P, cs::CompiledSystem)
+    transfer(c, P, u, cs, t) -> NamedTuple
+
+Evaluate one element at force buffer `P` and state `u`: fluxes, heat deliveries and
+production. Pure; used by both the assembler and the accessors.
+"""
+function transfer(c::CompiledConductor{<:ConductorLaw,ThermalRow,0}, P, u, cs::CompiledSystem, t)
     Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)
     tr = thermal_transfer(c.law, Ta, Tb)
     z = zero(tr.J_Q)
@@ -374,7 +555,7 @@ function transfer(c::CompiledConductor{<:ConductorLaw,ThermalRow,0}, P, cs::Comp
             parts = (; total = tr.S_gen))
 end
 
-function transfer(c::CompiledConductor{<:ConductorLaw,K,N}, P, cs::CompiledSystem) where {K,N}
+function transfer(c::CompiledConductor{<:ConductorLaw,K,N}, P, u, cs::CompiledSystem, t) where {K,N}
     ΔP = SVector{N}(ntuple(k -> P[c.fa[k]] - P[c.fb[k]], Val(N)))
     J = fluxes(c.law, ΔP)
     D = sum(ΔP .* J)
@@ -387,22 +568,100 @@ function transfer(c::CompiledConductor{<:ConductorLaw,K,N}, P, cs::CompiledSyste
             T_h = c.h == 0 ? oftype(D, NaN) : _node_T(P, cs, c.h), h.T_m, h.S_gen, h.parts)
 end
 
-function _apply!(du, P, c::CompiledConductor{<:ConductorLaw,ThermalRow,0}, cs)
-    tr = transfer(c, P, cs)
+"""
+Stream: upwinded bundle. With J_s = ṁ s_up and D = Σ (μ_a − μ_b) J, the upstream node loses
+entropy J_s at its own T, so Q_up = −T_up J_s, and the downstream node takes the rest:
+Q_dn = D − Q_up. Production [D + J_s (T_up − T_dn)]/T_dn.
+"""
+function transfer(c::CompiledStream{D,N}, P, u, cs::CompiledSystem, t) where {D,N}
+    mdot = mass_flow(c.driver, -P[c.pa], -P[c.pb])
+    fwd = mdot >= 0
+    s_up, y = fwd ? _upstream(cs, u, c.a, c.ca, c.ya) : _upstream(cs, u, c.b, c.cb, c.yb)
+    J = SVector{N}(ntuple(k -> mdot * y[k], Val(N)))
+    Js = mdot * s_up
+    Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)
+    Dp = sum(ntuple(k -> (P[c.fa[k]] - P[c.fb[k]]) * J[k], Val(N)))
+    if fwd
+        Q_a = -Ta * Js
+        Q_b = Dp - Q_a
+        S_gen = (Dp + Js * (Ta - Tb)) / Tb
+    else
+        Q_b = Tb * Js
+        Q_a = Dp - Q_b
+        S_gen = (Dp + Js * (Ta - Tb)) / Ta
+    end
+    return (; mdot, J, Js, D = Dp, Q_a, Q_b, T_a = Ta, T_b = Tb, S_gen, parts = (; total = S_gen))
+end
+
+"""
+Ideal pump a → b: the fluid leaves a at its own state and is delivered at (s_a, p_b).
+External work W = E* − E_a, where E = Σ μ J + T J_s at each state.
+"""
+function transfer(c::CompiledPump{F,M,N}, P, u, cs::CompiledSystem, t) where {F,M,N}
+    mdot = _nonneg_flow(c.mdot(t), "pump")
+    s_a, y = _upstream(cs, u, c.a, c.ca, c.ya)
+    J = SVector{N}(ntuple(k -> mdot * y[k], Val(N)))
+    Js = mdot * s_a
+    Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)
+    st = isentropic_state(c.mat, s_a, -P[c.pb])
+    E_a = sum(ntuple(k -> P[c.fa[k]] * J[k], Val(N))) + Ta * Js
+    E_star = st.μ * mdot + st.T * Js
+    W = E_star - E_a
+    Q_a = -Ta * Js
+    Q_b = E_star - sum(ntuple(k -> P[c.fb[k]] * J[k], Val(N)))
+    S_gen = (sum(ntuple(k -> (st.μ - P[c.fb[k]]) * J[k], Val(N))) + Js * (st.T - Tb)) / Tb
+    return (; mdot, J, Js, W, Q_a, Q_b, T_a = Ta, T_b = Tb, T_star = st.T, S_gen, parts = (; total = S_gen))
+end
+
+"""
+Flow boundary into node d. Passive: delivered at (T_in, p_in); p_d ≤ p_in is required of every
+accepted state (`passive_violations`), not of solver trial points.
+Pumped: delivered isentropically at (s_in, p_d), with the work booked.
+"""
+function transfer(c::CompiledBoundary{F,M,N}, P, u, cs::CompiledSystem, t) where {F,M,N}
+    mdot = _nonneg_flow(c.mdot(t), "flow boundary")
+    Tel = promote_type(eltype(P), Float64)
+    p_d = -P[c.pd]
+    if c.pumped
+        st = isentropic_state(c.mat, c.s_in, p_d)
+        T_del, μ_del = convert(Tel, st.T), ntuple(k -> convert(Tel, st.μ), Val(N))
+    else                                   # admissibility (p_d ≤ p_in) is checked on accepted states
+        T_del, μ_del = convert(Tel, c.T_in), ntuple(k -> convert(Tel, c.μ_in[k]), Val(N))
+    end
+    J = SVector{N}(ntuple(k -> mdot * c.y[k], Val(N)))
+    Js = mdot * c.s_in
+    Td = _node_T(P, cs, c.d)
+    E_in = sum(ntuple(k -> c.μ_in[k] * J[k], Val(N))) + c.T_in * Js
+    E_del = sum(ntuple(k -> μ_del[k] * J[k], Val(N))) + T_del * Js
+    Q_d = E_del - sum(ntuple(k -> P[c.fd[k]] * J[k], Val(N)))
+    S_gen = (sum(ntuple(k -> (μ_del[k] - P[c.fd[k]]) * J[k], Val(N))) + Js * (T_del - Td)) / Td
+    return (; mdot, J, Js, W = E_del - E_in, E_in, Q_d, T_d = Td, S_gen, parts = (; total = S_gen))
+end
+
+"Pass-through outlet: the node's own bundle leaves the model, with no generation."
+function transfer(c::CompiledOutlet{O,N}, P, u, cs::CompiledSystem, t) where {O,N}
+    mdot = outlet_flow(c.outlet, -P[c.pu], t)
+    s_u, y = _upstream(cs, u, c.u, c.cu, ntuple(_ -> 0, Val(N)))
+    J = SVector{N}(ntuple(k -> mdot * y[k], Val(N)))
+    Js = mdot * s_u
+    Tu = _node_T(P, cs, c.u)
+    E = sum(ntuple(k -> P[c.fu[k]] * J[k], Val(N))) + Tu * Js
+    return (; mdot, J, Js, E, T_u = Tu)
+end
+
+function _apply!(du, P, u, c::CompiledConductor{<:ConductorLaw,ThermalRow,0}, cs, t)
+    tr = transfer(c, P, u, cs, t)
     _heat!(du, cs, c.a, tr.Q_a, tr.T_a)
     _heat!(du, cs, c.b, tr.Q_b, tr.T_b)
     @inbounds du[c.led] += tr.S_gen
     return nothing
 end
 
-function _apply!(du, P, c::CompiledConductor{<:ConductorLaw,K,N}, cs) where {K,N}
-    tr = transfer(c, P, cs)
-    @inbounds for k in 1:N
-        du[c.ca[k]] -= tr.J[k]
-        du[c.cb[k]] += tr.J[k]
-        # a charge moved into or out of a reservoir carries energy P·J
-        cs.node_U[c.a] == 0 || (du[cs.node_U[c.a]] -= P[c.fa[k]] * tr.J[k])
-        cs.node_U[c.b] == 0 || (du[cs.node_U[c.b]] += P[c.fb[k]] * tr.J[k])
+function _apply!(du, P, u, c::CompiledConductor{<:ConductorLaw,K,N}, cs, t) where {K,N}
+    tr = transfer(c, P, u, cs, t)
+    for k in 1:N
+        _charge!(du, cs, c.a, c.ca[k], -tr.J[k], P[c.fa[k]])
+        _charge!(du, cs, c.b, c.cb[k], tr.J[k], P[c.fb[k]])
     end
     on = active(c.kernel)
     on[1] && _heat!(du, cs, c.a, tr.Q_a, tr.T_a)
@@ -419,9 +678,48 @@ end
     return nothing
 end
 
-function _apply_group!(du, P, group::Vector{<:CompiledConductor}, cs)
+function _apply!(du, P, u, c::Union{CompiledStream{D,N},CompiledPump{D,M,N}}, cs, t) where {D,M,N}
+    tr = transfer(c, P, u, cs, t)
+    for k in 1:N
+        _charge!(du, cs, c.a, c.ca[k], -tr.J[k], P[c.fa[k]])
+        _charge!(du, cs, c.b, c.cb[k], tr.J[k], P[c.fb[k]])
+    end
+    _heat!(du, cs, c.a, tr.Q_a, tr.T_a)
+    _heat!(du, cs, c.b, tr.Q_b, tr.T_b)
+    @inbounds du[c.led] += tr.S_gen
+    c isa CompiledPump && (@inbounds du[c.led+1] += tr.W)
+    return nothing
+end
+
+function _apply!(du, P, u, c::CompiledBoundary{F,M,N}, cs, t) where {F,M,N}
+    tr = transfer(c, P, u, cs, t)
+    @inbounds for k in 1:N
+        du[c.cd[k]] += tr.J[k]
+        du[c.led+1+k] -= tr.J[k]                 # boundary receives −ṁ_k
+    end
+    _heat!(du, cs, c.d, tr.Q_d, tr.T_d)
+    @inbounds du[c.led] += tr.S_gen
+    @inbounds du[c.led+1] += tr.W
+    @inbounds du[c.led+2+N] -= tr.Js              # entropy received (negative: supplied)
+    @inbounds du[c.led+3+N] -= tr.E_in            # energy received
+    return nothing
+end
+
+function _apply!(du, P, u, c::CompiledOutlet{O,N}, cs, t) where {O,N}
+    tr = transfer(c, P, u, cs, t)
+    @inbounds for k in 1:N
+        du[c.cu[k]] -= tr.J[k]
+        du[c.led+k-1] += tr.J[k]
+    end
+    @inbounds du[cs.node_S[c.u]] -= tr.Js
+    @inbounds du[c.led+N] += tr.Js
+    @inbounds du[c.led+N+1] += tr.E
+    return nothing
+end
+
+function _apply_group!(du, P, u, group::Vector, cs, t)
     for c in group
-        _apply!(du, P, c, cs)
+        _apply!(du, P, u, c, cs, t)
     end
     return nothing
 end
@@ -435,12 +733,41 @@ All bookkeeping is done here.
 function assemble!(du, u, cs::CompiledSystem, t)
     P = force_buffer(cs, u)
     fill!(du, zero(eltype(du)))
-    foreach(grp -> _apply_group!(du, P, grp, cs), cs.conductor_groups)
+    for grp in cs.element_groups
+        _apply_group!(du, P, u, grp, cs, t)
+    end
     return nothing
 end
 
 "In-place ODE right-hand side; the parameter is the compiled system."
 ode_rhs!(du, u, cs::CompiledSystem, t) = assemble!(du, u, cs, t)
+
+"""
+    passive_violations(cs, u) -> Vector
+
+Passive flow boundaries whose node pressure exceeds their supply pressure at state `u`, as
+`(name, p_in, p_node)`. Such a boundary would need work to deliver (label it `:pumped`).
+"""
+function passive_violations(cs::CompiledSystem, u::AbstractVector)
+    out = Tuple{Symbol,Float64,Float64}[]
+    P = nothing
+    for grp in cs.element_groups, c in grp
+        c isa CompiledBoundary && !c.pumped || continue
+        P === nothing && (P = copy(force_buffer(cs, u)))
+        p_d = -P[c.pd]
+        p_d > c.p_in * (1 + 1e-12) && push!(out, (c.name, c.p_in, p_d))
+    end
+    return out
+end
+
+function _throw_passive(v, t)
+    name, p_in, p_d = first(v)
+    throw(ArgumentError("passive flow boundary :$name delivers at p = $p_in Pa into a node at p = $p_d Pa" *
+                        (t === nothing ? "" : " at t = $t") * "; label it supply = :pumped, or raise its pressure"))
+end
+
+"Whether `u` is admissible: valid material states and no passive boundary pushing uphill."
+admissible(cs::CompiledSystem, u::AbstractVector) = all_valid(cs, u) && isempty(passive_violations(cs, u))
 
 "Whether every body's charges in `u` are a valid state of its material."
 function all_valid(cs::CompiledSystem, u::AbstractVector)
@@ -455,20 +782,18 @@ end
 """
     jacobian_sparsity(cs) -> SparseMatrixCSC
 
-Structural Jacobian pattern from the graph topology: each conductor couples all charges of
-the bodies on its ports; ledger rows depend on the bodies they observe; ledger columns are
-empty.
+Structural Jacobian pattern from the topology: each element couples all charges of the
+bodies on its ports, and its ledger rows (and those of the reservoirs it touches) depend on
+them; ledger columns are empty.
 """
 function jacobian_sparsity(cs::CompiledSystem)
     n = cs.nphys + cs.nledger
     I, J = collect(1:n), collect(1:n)
     nb = nbodies(cs)
     body_cols(i) = (off = cs.body_offset[i]; off:off+ncharges(cs.bodies[i].material)-1)
-    for grp in cs.conductor_groups, c in grp
-        nodes = [i for i in (c.a, c.b, c.h) if i != 0]
+    for (nodes, led) in cs.touch
         cols = reduce(vcat, [collect(body_cols(i)) for i in nodes if i <= nb]; init = Int[])
-        rows = copy(cols)
-        append!(rows, cs.conductor_led[cs.conductor_index[c.name]])
+        rows = vcat(cols, collect(led))
         for i in nodes
             i > nb || continue
             j = i - nb

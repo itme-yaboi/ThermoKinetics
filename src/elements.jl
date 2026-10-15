@@ -26,30 +26,50 @@ Body(name::Symbol, mat::Material; state...) = Body(name, mat, charges_at(mat; st
 domains(b::Body) = domains(b.material)
 
 """
-    Reservoir(name; T = nothing, p = nothing)
+    Reservoir(name; T = nothing, p = nothing, material = nothing)
     Reservoir(name, domain => force, ...)
 
 Fixed forces, infinite capacity (Dirichlet). The keyword form takes temperature and pressure
-(stored as the force −p). The pair form takes raw forces, P = ∂U/∂E, for any domain.
+(stored as the force −p). With a `material` (a fluid with thermal, volumetric and species
+charges), the reservoir also fixes the chemical potentials μ(T, p) and the specific entropy
+of that fluid, so it can supply or absorb a stream. The pair form takes raw forces,
+P = ∂U/∂E, for any domain.
 """
 struct Reservoir
     name::Symbol
     domains::Vector{FormOfMotion}
     forces::Vector{Float64}
+    material::Union{Nothing,Material}   # fluid held, if the reservoir can exchange mass
+    s::Float64                          # specific entropy of that fluid [J/(kg K)] (NaN without one)
+    y::Vector{Float64}                  # its mass fractions, in the order of its Species domains
     function Reservoir(name::Symbol, pairs::Pair{<:FormOfMotion,<:Real}...)
-        isempty(pairs) && throw(ArgumentError("a reservoir needs at least one fixed force"))
         doms = FormOfMotion[first(p) for p in pairs]
-        allunique(doms) || throw(ArgumentError("duplicate domains in reservoir :$name"))
         vals = Float64[last(p) for p in pairs]
+        return Reservoir(name, doms, vals, nothing, NaN, Float64[])
+    end
+    function Reservoir(name::Symbol, doms::Vector{FormOfMotion}, vals::Vector{Float64},
+                       material::Union{Nothing,Material}, s::Float64, y::Vector{Float64})
+        isempty(doms) && throw(ArgumentError("a reservoir needs at least one fixed force"))
+        allunique(doms) || throw(ArgumentError("duplicate domains in reservoir :$name"))
         all(isfinite, vals) || throw(ArgumentError("reservoir forces must be finite"))
         for (d, v) in zip(doms, vals)
             d isa Thermal && _check_positive(v, "reservoir temperature")
         end
-        return new(name, doms, vals)
+        return new(name, doms, vals, material, s, y)
     end
 end
 
-function Reservoir(name::Symbol; T = nothing, p = nothing)
+function Reservoir(name::Symbol; T = nothing, p = nothing, material::Union{Nothing,Material} = nothing)
+    if material !== nothing
+        (T === nothing || p === nothing) && throw(ArgumentError("a reservoir with a material needs both T and p"))
+        _check_positive(T, "reservoir temperature")
+        _check_positive(p, "reservoir pressure")
+        E = charges_at(material; T, p, m = 1.0)            # one kilogram at (T, p)
+        doms = collect(FormOfMotion, domains(material))
+        m = sum(E[i] for i in mass_slots(material))
+        return Reservoir(name, doms, Vector{Float64}(forces(material, E)), material,
+                          E[thermal_slot(material)] / m, Float64[E[i] / m for i in mass_slots(material)])
+    end
     pairs = Pair{FormOfMotion,Float64}[]
     T === nothing || (_check_positive(T, "reservoir temperature"); push!(pairs, Thermal() => T))
     p === nothing || (_check_positive(p, "reservoir pressure"); push!(pairs, Volumetric() => -p))
@@ -198,3 +218,110 @@ struct Conductor{L<:ConductorLaw,P<:Union{Nothing,DissipationPolicy}}
 end
 
 domains(c::Conductor) = has_thermal_row(c.law) ? (Thermal(), nonthermal_domains(c.law)...) : nonthermal_domains(c.law)
+
+# --- streams, pumps, flow boundaries (DESIGN §7) ---------------------------------------------
+
+abstract type FlowDriver end
+
+"""
+    HydraulicConductance(κ)
+
+Flow driver for a `Stream`: ṁ = κ (p_a − p_b), κ ≥ 0 [kg/(s Pa)]. The sign of ṁ follows the
+pressure difference by type, so a stream between bodies always runs down the pressure
+gradient. A driver only sets ṁ: it deposits no friction heat (the stream's own generation
+already contains the throttling loss, 07 §4).
+"""
+struct HydraulicConductance <: FlowDriver
+    κ::Float64
+    function HydraulicConductance(κ::Real)
+        (κ >= 0 && isfinite(κ)) || throw(ArgumentError("hydraulic conductance must be ≥ 0 and finite, got $κ"))
+        return new(κ)
+    end
+end
+
+mass_flow(d::HydraulicConductance, pa, pb) = d.κ * (pa - pb)
+
+"""
+    Stream(driver)
+
+Advection of a fluid between two nodes (07 §4): a bundle of charges, namely each species'
+mass and the entropy ṁ s, evaluated at the upstream state (upwinding). Volume is not
+advected into a fixed control volume. The downstream node receives the mass at its own μ,
+and the rest of the carried energy ṁ h_u as entropy at its own T. The generation
+ṁ[s_u(T_u − T_d) + Σ y(μ_u − μ_d)]/T_d is booked on the stream.
+"""
+struct Stream{D<:FlowDriver}
+    driver::D
+end
+
+"""
+    IdealPump(mdot)
+
+Work-supplied flow from port a to port b at a prescribed ṁ = mdot(t) ≥ 0 [kg/s], whatever
+the pressures (D-13). The fluid is raised isentropically from p_a to p_b: the delivered state
+is (s_a, p_b), and the shaft work ṁ (h(s_a, p_b) − h_a) is booked as external work. Negative
+work, with flow down the gradient, is an ideal turbine.
+"""
+struct IdealPump{F}
+    mdot::F
+end
+
+"""
+    FlowBoundary(material; T, p, mdot, supply)
+
+External inflow of `material` at (T, p) into a node, at ṁ = mdot(t) ≥ 0 [kg/s]. `supply` is
+required:
+- `:passive`: the fluid arrives at (T, p). The node pressure must not exceed p (an error
+  otherwise, naming the boundary).
+- `:pumped`: an ideal pump raises it isentropically to the node pressure, with the work booked.
+
+The advected entropy is booked as boundary flow; the inlet-face generation is booked on the
+boundary.
+"""
+struct FlowBoundary{M<:Material,F}
+    material::M
+    T::Float64
+    p::Float64
+    mdot::F
+    supply::Symbol
+    function FlowBoundary(material::Material; T::Real, p::Real, mdot, supply::Union{Symbol,Nothing} = nothing)
+        supply === nothing &&
+            throw(ArgumentError("label the flow boundary: supply = :passive (fluid arrives at its own p) or :pumped"))
+        supply in (:passive, :pumped) || throw(ArgumentError("supply must be :passive or :pumped, got :$supply"))
+        _check_positive(T, "boundary temperature")
+        _check_positive(p, "boundary pressure")
+        return new{typeof(material),typeof(mdot)}(material, T, p, mdot, supply)
+    end
+end
+
+"""
+    PassThroughOutlet(; mdot)
+    PassThroughOutlet(; κ, p_out)
+
+External outflow (07 §5): carries the node's own bundle out of the model with no
+generation. Either a prescribed ṁ = mdot(t) ≥ 0, or ṁ = κ max(p − p_out, 0) to a back
+pressure (no backflow: an outlet cannot supply a state).
+"""
+struct PassThroughOutlet{F}
+    mdot::F                 # a function of t, or `nothing`
+    κ::Float64
+    p_out::Float64
+    function PassThroughOutlet(; mdot = nothing, κ = nothing, p_out = nothing)
+        if mdot !== nothing
+            (κ === nothing && p_out === nothing) || throw(ArgumentError("give either mdot, or κ and p_out"))
+            return new{typeof(mdot)}(mdot, NaN, NaN)
+        end
+        (κ === nothing || p_out === nothing) && throw(ArgumentError("give either mdot, or κ and p_out"))
+        (κ >= 0 && isfinite(κ)) || throw(ArgumentError("outlet conductance must be ≥ 0 and finite, got $κ"))
+        _check_positive(p_out, "back pressure")
+        return new{Nothing}(nothing, Float64(κ), Float64(p_out))
+    end
+end
+
+outlet_flow(o::PassThroughOutlet{Nothing}, p, t) = o.κ * max(p - o.p_out, zero(p))
+outlet_flow(o::PassThroughOutlet, p, t) = _nonneg_flow(o.mdot(t), "outlet")
+
+function _nonneg_flow(m, what)
+    m >= 0 || throw(ArgumentError("prescribed $what mass flow must be ≥ 0, got $m"))
+    return m
+end

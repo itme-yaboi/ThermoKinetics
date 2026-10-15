@@ -1,9 +1,10 @@
 # Model graph (DESIGN §4.1, D-17): a bipartite MetaGraph whose vertices are nodes (bodies,
-# reservoirs) and elements (conductors), and whose edges are ports carrying the port role.
+# reservoirs) and elements (conductors, streams, pumps, flow boundaries, outlets), and whose
+# edges are ports carrying the port role.
 # The graph is for building, validation and topology queries; `compile` lowers it to flat,
 # type-stable data and the graph is never touched in the right-hand side.
 
-"A port: the edge between an element and a node. `role` is :a, :b, or :h (third thermal node) for a conductor."
+"A port: the edge between an element and a node. `role` is :a, :b, or :h (a conductor's third thermal node)."
 struct Port
     role::Symbol
 end
@@ -74,6 +75,42 @@ function connect!(sys::ThermoSystem, el::Conductor, a::Symbol, b::Symbol;
     h === nothing || (sys.graph[name, h] = Port(:h))
     push!(sys.elements, name)
     return name
+end
+
+_default_name(sys::ThermoSystem, el) = Symbol(lowercase(string(nameof(typeof(el)))), :_, length(sys.elements) + 1)
+
+function _add_element!(sys::ThermoSystem, el, name::Symbol, ports::Pair{Symbol,Symbol}...)
+    _check_new_label(sys, name)
+    sys.graph[name] = el
+    for (node, role) in ports
+        sys.graph[name, node] = Port(role)
+    end
+    push!(sys.elements, name)
+    return name
+end
+
+"""
+    connect!(sys, stream_or_pump, a, b; name) -> Symbol
+
+Join nodes `a` and `b` with a `Stream` (positive ṁ from a to b) or an `IdealPump` (from a to b).
+"""
+function connect!(sys::ThermoSystem, el::Union{Stream,IdealPump}, a::Symbol, b::Symbol;
+                  name::Symbol = _default_name(sys, el))
+    _check_node(sys, a)
+    _check_node(sys, b)
+    a == b && throw(ArgumentError("a $(nameof(typeof(el))) needs two distinct nodes, got :$a twice"))
+    return _add_element!(sys, el, name, a => :a, b => :b)
+end
+
+"""
+    connect!(sys, boundary_or_outlet, node; name) -> Symbol
+
+Attach a `FlowBoundary` (inflow into `node`) or a `PassThroughOutlet` (outflow from `node`).
+"""
+function connect!(sys::ThermoSystem, el::Union{FlowBoundary,PassThroughOutlet}, node::Symbol;
+                  name::Symbol = _default_name(sys, el))
+    _check_node(sys, node)
+    return _add_element!(sys, el, name, node => :a)
 end
 
 "Label of the node on port `role` of element `el`."

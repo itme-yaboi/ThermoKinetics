@@ -14,5 +14,6 @@ include("helpers.jl")
     include("test_thermostatics.jl")  # 08 §B: B2
     include("test_thermokinetics.jl") # 08 §C: C1, C2, C8
     include("test_unsteady.jl")       # 08 §D: D1 (thermal analogue), D4 (= D3 thermal), D5 (slab)
+    include("test_streams.jl")        # slice 3: B5, C7, streams, pumps, boundaries
     include("test_applications.jl")   # DESIGN §0.1 application tests
 end

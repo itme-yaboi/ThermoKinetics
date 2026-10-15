@@ -292,6 +292,35 @@ Each item lists what was built instead of the design text, and why.
 - **Why:** copyrighted books should not be copied into every clone and into permanent history.
 - **Consequence:** in a fresh clone, the Lengauer citations in DESIGN §17.1 and the Veinik source paths resolve only after the author copies the books in locally. The paper, the notes and `docs/veinik/` are always available.
 
+### D-26 Slice 3 implementation: deviations from DESIGN.md — accepted (slice 3, 2026-10-14)
+1. **Element groups held in a `Vector{Any}`, not a `Tuple`** (supersedes D-22 §9 and DESIGN §11 step 3; DESIGN updated).
+   - Each group is still a concretely typed vector with a specialized loop (a function barrier).
+   - `CompiledSystem` is no longer parametric, so every model shares one compiled right-hand side and one compiled solver.
+   - Measured: a new model with already-seen element types went from a full solver recompile (~20–30 s) to ~0.01 s, and the test suite from ~10 min to the time recorded in STATUS.
+   - Cost: one dynamic dispatch per group per call, negligible next to the AD Jacobian.
+   - Alternative: FunctionWrappers or full type erasure per element — not needed.
+2. **Passive-boundary admissibility is checked on accepted states, not inside the right-hand side.**
+   - Solver trial points (Rosenbrock stages, Newton iterates) can momentarily put a node above the supply pressure.
+   - The check (`passive_violations`) runs in `rates`, rejects steps through `isoutofdomain`, and is re-checked on the final steady state.
+   - It raises the explicit error named in DESIGN §7.3.
+3. **`steady_state` changes:**
+   - It solves only the *active* charges (those some element writes); a rigid vessel's V is held fixed.
+   - It checks anchoring per conserved quantity: energy, and each charge moved by an element.
+   - Inadmissible trial states return NaN, and `TrustRegion` is the fallback after Newton.
+   - Cold starts of strongly coupled flow networks (the 2 × N-cell heat exchanger) can still fail. The documented route is a transient warm start. `PseudoTransient` was tried and rejected: it failed too, and cost ~50 s.
+4. **Stream production is computed as [D + J_s (T_up − T_dn)]/T_dn.**
+   - It is ≥ 0 in exact arithmetic (concavity, flow down the pressure gradient) but not sign-exact in floating point, because the advected terms carry |s| with an arbitrary reference.
+   - Tests allow −1e-12 absolute per element, and entropy closure ≤ 1e-9 (vs 1e-10 without streams).
+5. **Single species only** for `IdealPump` and `FlowBoundary`. `isentropic_state` exists only for `IdealGas`; other materials throw. Streams themselves carry any species set, provided both ends hold the same one.
+6. **Material reservoirs:** `Reservoir(name; T, p, material)` fixes μ(T, p) and s. `charges_at(::IdealGas)` accepts T and any two of m, p, V.
+7. **Outlets and boundaries:**
+   - `PassThroughOutlet` uses ṁ = κ max(p − p_out, 0), or a prescribed ṁ(t). There is no backflow, since an outlet cannot supply a state.
+   - Boundaries and outlets attach to bodies only.
+   - A turbulent (√Δp) driver is not built yet.
+8. **`closure` charge scale:** the maximum over the run of the bodies' Σ|charge|, not its initial value. A tank filled from 1 Pa starts with 1e-7 kg, which made round-off look like 3e-8.
+9. **Heat-exchanger application test:** checked as first-order convergence (error ratio N = 10 → 20 within 1.8–2.2, Richardson value within 2e-3 of ε–NTU), not a fixed tolerance. Measured errors: −0.042, −0.021, −0.011 at N = 10, 20, 40.
+10. **Still deferred:** inertance-driven flows (accepted earlier), multi-species pumps and boundaries, real-fluid backends.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

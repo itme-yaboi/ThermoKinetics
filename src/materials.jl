@@ -126,8 +126,8 @@ internal_energy(s::ConstantCapacitySolid, E) = s.m * s.c * s.T_ref * exp(E[1] / 
 """
     charges_at(mat; kwargs...)
 
-Charges of a body made of `mat` at a given state. Solids: `T`. Ideal gas: `T`, `m` and one
-of `p` or `V`. Elastic volume: `V` or `p`.
+Charges of a body made of `mat` at a given state. Solids: `T`. Ideal gas: `T` and two of
+`m`, `p`, `V`. Elastic volume: `V` or `p`.
 """
 function charges_at(s::ConstantCapacitySolid; T::Real)
     _check_positive(T, "temperature")
@@ -179,16 +179,14 @@ end
 
 valid_state(g::IdealGas, E::AbstractVector) = all(isfinite, E) && E[2] > 0 && E[3] > 0
 
-function charges_at(g::IdealGas; T::Real, m::Real, p = nothing, V = nothing)
+function charges_at(g::IdealGas; T::Real, m = nothing, p = nothing, V = nothing)
     _check_positive(T, "temperature")
-    _check_positive(m, "mass")
-    (p === nothing) == (V === nothing) && throw(ArgumentError("give exactly one of p or V"))
-    if V === nothing
-        _check_positive(p, "pressure")
-        V = m * g.R * T / p
-    else
-        _check_positive(V, "volume")
-    end
+    count(!isnothing, (m, p, V)) == 2 || throw(ArgumentError("give T and exactly two of m, p, V"))
+    m === nothing || _check_positive(m, "mass")
+    p === nothing || _check_positive(p, "pressure")
+    V === nothing || _check_positive(V, "volume")
+    m === nothing && (m = p * V / (g.R * T))          # pV = mRT
+    V === nothing && (V = m * g.R * T / p)
     v_ref = g.R * g.T_ref / g.p_ref
     s = g.cv * log(T / g.T_ref) + g.R * log((V / m) / v_ref)
     return SVector(m * s, Float64(V), Float64(m))
@@ -280,3 +278,17 @@ function charges_at(c::Composite, states::NamedTuple...)
         throw(ArgumentError("give one state per part ($(length(c.parts))), got $(length(states))"))
     return vcat((charges_at(p; s...) for (p, s) in zip(c.parts, states))...)
 end
+
+"""
+    isentropic_state(mat, s, p) -> (; T, μ)
+
+Temperature and chemical potential per unit mass of a single-species fluid at specific
+entropy `s` and pressure `p`: the state an ideal pump delivers (DESIGN §2.4 item 8).
+"""
+function isentropic_state(g::IdealGas, s, p)
+    cp = g.cv + g.R
+    T = g.T_ref * exp((s + g.R * log(p / g.p_ref)) / cp)   # s = c_p ln(T/T_ref) − R ln(p/p_ref)
+    return (; T, μ = cp * T - T * s)
+end
+isentropic_state(mat::Material, s, p) =
+    throw(ArgumentError("isentropic_state is not available for $(typeof(mat)) yet (ideal pumps need it)"))

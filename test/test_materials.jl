@@ -35,7 +35,7 @@ using ForwardDiff: hessian
         @test !valid_state(He, [0.0, -1e-3, 1e-3])      # negative volume
         @test !valid_state(He, [0.0, 1e-3, 0.0])        # no mass: T and μ undefined
         @test_throws ArgumentError IdealGas(:X; R = -1.0, cv = 700.0)
-        @test_throws ArgumentError charges_at(He; T = 300.0, m = 1.0)               # needs p or V
+        @test_throws ArgumentError charges_at(He; T = 300.0, m = 1.0)               # needs two of m, p, V
         @test_throws ArgumentError charges_at(He; T = 300.0, m = 1.0, p = 1e5, V = 1.0)
     end
 

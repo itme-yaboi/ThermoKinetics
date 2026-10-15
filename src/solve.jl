@@ -9,6 +9,8 @@ initial_state(cs::CompiledSystem) = copy(cs.u0)
 The full right-hand side (physical and ledger rates) at state `u`.
 """
 function rates(cs::CompiledSystem, u::AbstractVector; t::Real = 0.0)
+    v = passive_violations(cs, u)
+    isempty(v) || _throw_passive(v, t)
     du = similar(u, promote_type(eltype(u), Float64))
     ode_rhs!(du, u, cs, t)
     return du
@@ -70,7 +72,8 @@ end
     simulate(cs, tspan; alg = Rodas5P(), reltol = 1e-8, atol_scale = 1.0, sparse, kwargs...)
 
 Integrate with the ledger states excluded from the error norm. Steps that would leave a
-material's valid states (e.g. a gas with V ≤ 0) are rejected. Other keywords (for example
+material's valid states (e.g. a gas with V ≤ 0), or push a passive boundary uphill, are
+rejected. Other keywords (for example
 `saveat`) go to `solve`.
 """
 function simulate(cs::CompiledSystem, tspan; alg = Rodas5P(), reltol::Real = 1e-8, atol_scale::Real = 1.0,
@@ -78,8 +81,12 @@ function simulate(cs::CompiledSystem, tspan; alg = Rodas5P(), reltol::Real = 1e-
     prob = SciMLBase.ODEProblem(cs, tspan; u0, sparse)
     sol = SciMLBase.solve(prob, alg; reltol, abstol = abstol_vector(cs; atol_scale),
                           internalnorm = PhysNorm(cs.nphys),
-                          isoutofdomain = (u, p, t) -> !all_valid(p, u), kwargs...)
-    SciMLBase.successful_retcode(sol) || error("integration failed: retcode $(sol.retcode)")
+                          isoutofdomain = (u, p, t) -> !admissible(p, u), kwargs...)
+    if !SciMLBase.successful_retcode(sol)
+        v = passive_violations(cs, sol.u[end])
+        isempty(v) || _throw_passive(v, sol.t[end])
+        error("integration failed: retcode $(sol.retcode)")
+    end
     return sol
 end
 
@@ -88,36 +95,108 @@ end
 """
     steady_state(cs; u0 = initial_state(cs)) -> u
 
-Solve f_phys(u_phys) = 0 by Newton (ledgers excluded, D-10); the returned ledger block is
-zero. Report steady losses with `entropy_production(cs, u)`. Every body must be connected
-to a reservoir: isolated components have one singular direction per conserved total, and
-the constraint-row treatment (DESIGN §12.2) is not implemented yet.
+Solve f_phys = 0 by Newton (ledgers excluded, D-10); the returned ledger block is zero.
+Report steady losses with `entropy_production(cs, u)`.
+
+Only the *active* charges are unknowns: those some element writes. A rigid vessel's volume,
+for instance, is held at its `u0` value. The system must be anchored:
+- energy: every connected part has a reservoir, a flow boundary or an outlet;
+- each conserved charge: every group of bodies exchanging it reaches a reservoir holding
+  it, or a boundary or outlet carrying it.
+
+Isolated groups have one singular direction per conserved total. The constraint-row
+treatment (DESIGN §12.2) is not implemented yet; integrate those with `simulate` instead.
+
+Newton (then trust region) needs a reasonable start. For flow networks, warm-start from a
+short transient: `steady_state(cs; u0 = simulate(cs, (0, t)).u[end])`.
 """
 function steady_state(cs::CompiledSystem; u0 = initial_state(cs))
     _check_anchored(cs)
-    cs.nphys == 0 && return copy(u0)
+    act = cs.active
+    isempty(act) && return copy(u0)
+    base = collect(Float64, u0[1:cs.nphys])
     function resid!(r, x, p)
-        ufull = vcat(x, zeros(eltype(x), p.nledger))
+        ufull = zeros(eltype(x), p.nphys + p.nledger)
+        ufull[1:p.nphys] .= base
+        ufull[act] .= x
+        if !admissible(p, ufull)         # e.g. a trial step to V < 0: reject it, do not throw
+            fill!(r, convert(eltype(r), NaN))
+            return nothing
+        end
         du = similar(ufull)
         assemble!(du, ufull, p, 0.0)
-        r .= view(du, 1:p.nphys)
+        r .= view(du, act)
         return nothing
     end
-    prob = NonlinearProblem(resid!, u0[1:cs.nphys], cs)
+    prob = NonlinearProblem(resid!, base[act], cs)
     sol = SciMLBase.solve(prob, NewtonRaphson())
-    SciMLBase.successful_retcode(sol) || error("steady-state solve failed: retcode $(sol.retcode)")
-    return vcat(sol.u, zeros(cs.nledger))
+    if !SciMLBase.successful_retcode(sol)            # far from the solution: globalize
+        sol = SciMLBase.solve(prob, TrustRegion())
+    end
+    SciMLBase.successful_retcode(sol) ||
+        error("steady-state solve failed: retcode $(sol.retcode). Try a transient warm start: " *
+              "steady_state(cs; u0 = simulate(cs, (0, t)).u[end])")
+    u = vcat(base, zeros(cs.nledger))
+    u[act] .= sol.u
+    v = passive_violations(cs, u)
+    isempty(v) || _throw_passive(v, nothing)
+    return u
+end
+
+"Union–find root."
+function _root(parent, i)
+    while parent[i] != i
+        parent[i] = parent[parent[i]]
+        i = parent[i]
+    end
+    return i
 end
 
 function _check_anchored(cs::CompiledSystem)
-    g = cs.sys.graph
-    for comp in connected_components(g.graph)
-        labels = [label_for(g, v) for v in comp]
-        any(l -> g[l] isa Body, labels) || continue
-        any(l -> g[l] isa Reservoir, labels) ||
-            throw(ArgumentError("steady_state: bodies $(filter(l -> g[l] isa Body, labels)) are not connected " *
-                                "to any reservoir (isolated components need constraint rows, not yet implemented)"))
+    nb, nn = nbodies(cs), nnodes(cs)
+    # energy: any element connects its nodes; reservoirs, boundaries and outlets anchor
+    parent = collect(1:nn)
+    anchored = falses(nn)
+    for j in nb+1:nn; anchored[j] = true; end
+    for (nodes, _, isbdry) in cs.moves
+        isbdry && foreach(i -> anchored[i] = true, nodes)
     end
+    for (nodes, _) in cs.touch, i in nodes[2:end]
+        parent[_root(parent, i)] = _root(parent, nodes[1])
+    end
+    _report_unanchored(cs, parent, anchored, "energy (no reservoir, flow boundary or outlet)")
+    # each conserved (non-thermal) charge moved by some element
+    doms = unique(d for (_, ds, _) in cs.moves for d in ds)
+    for d in doms
+        parent = collect(1:nn)
+        anchored = falses(nn)
+        involved = falses(nn)
+        for j in 1:nn-nb
+            d in cs.reservoirs[j].domains && (anchored[nb+j] = true)
+        end
+        for (nodes, ds, isbdry) in cs.moves
+            d in ds || continue
+            foreach(i -> involved[i] = true, nodes)
+            isbdry && foreach(i -> anchored[i] = true, nodes)
+            for i in nodes[2:end]
+                parent[_root(parent, i)] = _root(parent, nodes[1])
+            end
+        end
+        _report_unanchored(cs, parent, anchored, "$d"; only = involved)
+    end
+    return nothing
+end
+
+function _report_unanchored(cs, parent, anchored, what; only = trues(length(parent)))
+    nb = nbodies(cs)
+    ok = falses(length(parent))
+    for i in eachindex(parent)
+        anchored[i] && (ok[_root(parent, i)] = true)
+    end
+    bad = [cs.body_names[i] for i in 1:nb if only[i] && !ok[_root(parent, i)]]
+    isempty(bad) ||
+        throw(ArgumentError("steady_state: bodies $bad are not anchored for $what. Isolated groups conserve " *
+                            "that total, and the constraint-row treatment is not implemented yet; use simulate"))
     return nothing
 end
 
@@ -176,12 +255,14 @@ function set_temperature!(cs::CompiledSystem, u::AbstractVector, name::Symbol, T
     return u
 end
 
-function _conductor(cs::CompiledSystem, name::Symbol)
-    k = get(cs.conductor_index, name, 0)
-    k == 0 && throw(ArgumentError("no conductor named :$name"))
-    gi, pos = cs.conductor_ref[k]
-    return k, cs.conductor_groups[gi][pos]
+function _element(cs::CompiledSystem, name::Symbol)
+    ref = get(cs.element_ref, name, nothing)
+    ref === nothing && throw(ArgumentError("no element named :$name"))
+    return cs.element_groups[ref[1]][ref[2]]
 end
+
+_eval(cs::CompiledSystem, u::AbstractVector, name::Symbol; t::Real = 0.0) =
+    transfer(_element(cs, name), copy(force_buffer(cs, u)), u, cs, t)
 
 """
     flux(cs, u, conductor) -> NamedTuple
@@ -198,9 +279,9 @@ One conductor's transfer at state `u`:
 - end labels `a`, `b`.
 """
 function flux(cs::CompiledSystem, u::AbstractVector, name::Symbol)
-    _, c = _conductor(cs, name)
-    P = copy(force_buffer(cs, u))
-    tr = transfer(c, P, cs)
+    c = _element(cs, name)
+    c isa CompiledConductor || throw(ArgumentError(":$name is not a conductor; use mass_flow for flow elements"))
+    tr = _eval(cs, u, name)
     a, b = port_node(cs.sys, name, :a), port_node(cs.sys, name, :b)
     return merge(tr, (; S_out_of_a = -tr.Q_a / tr.T_a, S_into_b = tr.Q_b / tr.T_b, a, b))
 end
@@ -208,28 +289,54 @@ end
 "Heat flow [W] through a conductor's thermal row, positive from port a to port b."
 heat_flow(cs::CompiledSystem, u::AbstractVector, name::Symbol) = flux(cs, u, name).Q
 
-_ledger_total(cs::CompiledSystem, v, k::Int) = sum(v[j] for j in cs.conductor_led[k])
+"""
+    mass_flow(cs, u, element; t = 0.0)
 
-"Entropy production rate [W/K] of every conductor at state `u`."
-function entropy_production(cs::CompiledSystem, u::AbstractVector)
-    du = rates(cs, u)
-    return Dict(n => _ledger_total(cs, du, k) for (k, n) in enumerate(cs.conductor_names))
+Mass flow [kg/s] of a stream (positive from a to b), pump, flow boundary (into its node) or
+outlet (out of its node).
+"""
+function mass_flow(cs::CompiledSystem, u::AbstractVector, name::Symbol; t::Real = 0.0)
+    c = _element(cs, name)
+    c isa CompiledConductor && throw(ArgumentError(":$name is a conductor; use flux"))
+    return _eval(cs, u, name; t).mdot
+end
+
+_ledger_total(v, r::UnitRange{Int}) = sum(v[j] for j in r)
+
+"Entropy production rate [W/K] of every producing element at state `u`."
+function entropy_production(cs::CompiledSystem, u::AbstractVector; t::Real = 0.0)
+    du = rates(cs, u; t)
+    return Dict(n => _ledger_total(du, r) for (n, r) in cs.prod_led)
 end
 
 """
     entropy_production_parts(cs, u)
 
-Per conductor, the production rate split as the ledger records it: `(; total)` for kernel A,
+Per producing element, the production rate split as the ledger records it: `(; total)`, or
 `(; dissipation, conduction)` for an internal node (kernel B).
 """
-function entropy_production_parts(cs::CompiledSystem, u::AbstractVector)
-    P = copy(force_buffer(cs, u))
-    return Dict(n => transfer(_conductor(cs, n)[2], P, cs).parts for n in cs.conductor_names)
+function entropy_production_parts(cs::CompiledSystem, u::AbstractVector; t::Real = 0.0)
+    return Dict(n => _eval(cs, u, n; t).parts for n in keys(cs.prod_led))
 end
 
-"Integrated entropy production [J/K] of every conductor, read from the ledger block of `u`."
-function generated_entropy(cs::CompiledSystem, u::AbstractVector)
-    return Dict(n => _ledger_total(cs, u, k) for (k, n) in enumerate(cs.conductor_names))
+"Integrated entropy production [J/K] of every producing element, read from the ledger block of `u`."
+generated_entropy(cs::CompiledSystem, u::AbstractVector) =
+    Dict(n => _ledger_total(u, r) for (n, r) in cs.prod_led)
+
+"External work [W, or J if integrated] supplied by every pump and flow boundary, read from `v`."
+pump_work(cs::CompiledSystem, v::AbstractVector) = Dict(n => v[i] for (n, i) in cs.work_led)
+
+"""
+    boundary_ledger(cs, v, element) -> (; m, S, U, W)
+
+What a flow boundary or outlet *received* (mass, entropy, energy; negative for a supplying
+boundary) and the external work it took in, read from the ledger block of `v`.
+"""
+function boundary_ledger(cs::CompiledSystem, v::AbstractVector, name::Symbol)
+    r = get(cs.bound_led, name, nothing)
+    r === nothing && throw(ArgumentError(":$name is not a flow boundary or outlet"))
+    W = haskey(cs.work_led, name) ? v[cs.work_led[name]] : zero(eltype(v))
+    return (; m = _ledger_total(v, r.m), S = v[r.S], U = v[r.U], W)
 end
 
 """
@@ -256,8 +363,8 @@ end
 """
     total_charge(cs, u, domain)
 
-Σ over bodies of their `domain` charge, plus the charge received by reservoirs. For every
-non-thermal domain this is conserved (08 A2).
+Σ over bodies of their `domain` charge, plus what reservoirs, flow boundaries and outlets
+received. For every non-thermal domain this is conserved (08 A2).
 """
 function total_charge(cs::CompiledSystem, u::AbstractVector, d::FormOfMotion)
     s = 0.0
@@ -268,6 +375,9 @@ function total_charge(cs::CompiledSystem, u::AbstractVector, d::FormOfMotion)
     for (j, r) in enumerate(cs.reservoirs)
         k = findfirst(==(d), r.domains)
         k === nothing || (s += u[cs.res_led[j]+k-1])
+    end
+    for (dd, i) in cs.ext_charges
+        dd == d && (s += u[i])
     end
     return s
 end
@@ -287,30 +397,43 @@ function total_entropy(cs::CompiledSystem, u::AbstractVector)
     return s
 end
 
+"Energy terms outside the bodies, from `v`: received by reservoirs, boundaries and outlets, and −(external work)."
+function _external_energy_terms(cs::CompiledSystem, v::AbstractVector)
+    return vcat([reservoir_ledger(cs, v, n).U for n in cs.reservoir_names],
+                [v[r.U] for r in values(cs.bound_led)], [-v[i] for i in values(cs.work_led)])
+end
+
+"Entropy received outside the bodies (reservoirs, boundaries, outlets), term by term, from `v`."
+function _external_entropy_terms(cs::CompiledSystem, v::AbstractVector)
+    return vcat([reservoir_ledger(cs, v, n).S for n in cs.reservoir_names], [v[r.S] for r in values(cs.bound_led)])
+end
+
+_external_energy(cs::CompiledSystem, v::AbstractVector) = sum(_external_energy_terms(cs, v); init = 0.0)
+
 """
     energy_residual(cs, u) -> (; residual, scale)
 
-Instantaneous energy balance: Σ_bodies P·dE/dt plus the energy rate into reservoirs. It is
-zero to round-off at every state (each connection closes exactly). `scale` is the total
-energy throughput of the conductors.
+Instantaneous energy balance: Σ_bodies P·dE/dt, plus the energy rate into reservoirs,
+boundaries and outlets, minus external work. It is zero to round-off at every state (each
+connection closes exactly). `scale` is the total energy throughput of the elements.
 """
 function energy_residual(cs::CompiledSystem, u::AbstractVector)
     du = rates(cs, u)
     r = 0.0
-    for b in cs.bodies
-        r += dot(forces(b.material, charges(cs, u, b.name)), charges(cs, du, b.name))
-    end
-    for n in cs.reservoir_names
-        r += reservoir_ledger(cs, du, n).U
-    end
-    P = copy(force_buffer(cs, u))
     scale = 0.0
-    for n in cs.conductor_names
-        _, c = _conductor(cs, n)
-        tr = transfer(c, P, cs)
-        scale += abs(tr.Q_a) + abs(tr.Q_b) + abs(tr.Q_h)
-        for k in eachindex(tr.J)
-            scale += abs(tr.J[k]) * (abs(P[c.fa[k]]) + abs(P[c.fb[k]]))
+    for b in cs.bodies
+        F = forces(b.material, charges(cs, u, b.name))
+        dE = charges(cs, du, b.name)
+        r += dot(F, dE)
+        scale += sum(abs.(F .* dE))
+    end
+    ext = _external_energy(cs, du)
+    r += ext
+    scale += abs(ext)
+    for n in cs.element_names
+        tr = _eval(cs, u, n)
+        for f in (:Q_a, :Q_b, :Q_h, :Q_d, :W, :E, :E_in)
+            hasproperty(tr, f) && (scale += abs(getproperty(tr, f)))
         end
     end
     return (; residual = r, scale)
@@ -334,35 +457,38 @@ end
 Closure residuals over a transient (DESIGN §10), reported for every run. They are measured
 from the problem's initial state `sol.prob.u0`, whatever `saveat` kept, and ledgers count
 from their initial values.
-- energy: max |ΔU_bodies(t) + ΔU_reservoirs(t)|, which sits at integrator tolerance.
-  `energy_rel` divides by the energy moved.
-- entropy: max |ΔS_bodies(t) + ΔS_reservoirs(t) − ΔS_gen(t)|, which sits at round-off.
+- energy: max |ΔU_bodies + Δ(energy received by reservoirs, boundaries, outlets) −
+  Δ(external work)|, which sits at integrator tolerance. `energy_rel` divides by the
+  energy moved.
+- entropy: max |ΔS_bodies + Δ(entropy received outside) − ΔS_gen|, which sits at round-off.
   `entropy_rel` divides by the entropy moved plus produced.
 - charge: per non-thermal domain, max |Δ total_charge|, which sits at round-off.
-  `charge_rel` is the largest relative to Σ|charge| of the bodies.
+  `charge_rel` is the largest, relative to the bodies' Σ|charge| (its maximum over the run).
 """
 function closure(cs::CompiledSystem, sol)
     u0 = sol.prob.u0
     U0 = [internal_energy(b.material, charges(cs, u0, b.name)) for b in cs.bodies]
     S0 = total_entropy(cs, u0)
-    led0 = [reservoir_ledger(cs, u0, n) for n in cs.reservoir_names]
+    X0, Y0 = _external_energy_terms(cs, u0), _external_entropy_terms(cs, u0)
     Sgen0 = sum(values(generated_entropy(cs, u0)); init = 0.0)
     doms = _nonthermal_domains(cs)
     Q0 = [total_charge(cs, u0, d) for d in doms]
-    Qscale = [max(sum((abs(u0[cs.body_offset[i]+k-1]) for (i, b) in enumerate(cs.bodies)
-                       for (k, dd) in enumerate(domains(b.material)) if dd == d); init = 0.0), floatmin()) for d in doms]
+    body_charge(u, d) = sum((abs(u[cs.body_offset[i]+k-1]) for (i, b) in enumerate(cs.bodies)
+                             for (k, dd) in enumerate(domains(b.material)) if dd == d); init = 0.0)
+    # scale: the largest body total over the run (a tank filled from vacuum starts near zero)
+    Qscale = [max(maximum(body_charge(u, d) for u in sol.u), body_charge(u0, d), floatmin()) for d in doms]
     eE = 0.0; eS = 0.0; movedE = 0.0; movedS = 0.0; eQ = 0.0
     for u in sol.u
         Ub = [internal_energy(b.material, charges(cs, u, b.name)) for b in cs.bodies]
-        led = [reservoir_ledger(cs, u, n) for n in cs.reservoir_names]
-        dU_res = [l.U - l0.U for (l, l0) in zip(led, led0)]
-        dS_res = [l.S - l0.S for (l, l0) in zip(led, led0)]
+        dXt = _external_energy_terms(cs, u) .- X0
+        dYt = _external_entropy_terms(cs, u) .- Y0
+        dX, dY = sum(dXt; init = 0.0), sum(dYt; init = 0.0)
         dSgen = sum(values(generated_entropy(cs, u)); init = 0.0) - Sgen0
         dS = total_entropy(cs, u) - S0
-        eE = max(eE, abs(sum(Ub; init = 0.0) - sum(U0; init = 0.0) + sum(dU_res; init = 0.0)))
-        eS = max(eS, abs(dS + sum(dS_res; init = 0.0) - dSgen))
-        movedE = max(movedE, sum(abs.(Ub .- U0); init = 0.0) + sum(abs, dU_res; init = 0.0))
-        movedS = max(movedS, abs(dS) + sum(abs, dS_res; init = 0.0) + abs(dSgen))
+        eE = max(eE, abs(sum(Ub; init = 0.0) - sum(U0; init = 0.0) + dX))
+        eS = max(eS, abs(dS + dY - dSgen))
+        movedE = max(movedE, sum(abs.(Ub .- U0); init = 0.0) + sum(abs, dXt; init = 0.0))
+        movedS = max(movedS, abs(dS) + sum(abs, dYt; init = 0.0) + abs(dSgen))
         for (q, d) in enumerate(doms)
             eQ = max(eQ, abs(total_charge(cs, u, d) - Q0[q]) / Qscale[q])
         end
