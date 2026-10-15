@@ -531,6 +531,11 @@ Each item lists what was built instead of the design text, and why.
 - **Alternatives:** keep the notes tracked (D-25 as written); delete them in a new commit only (leaves them in history); force-push without deleting the remote (old commits can stay reachable on GitHub).
 - **Consequence:** in a fresh clone, the README's notes row and CLAUDE.md's pointer resolve only after the author copies the notes in locally. `docs/veinik/` is unaffected and remains the working reference.
 
+### D-37 `docs/veinik/` is local only — accepted (user, 2026-10-15); extends D-36
+- **Chosen:** `docs/veinik/` (the curated summaries of Veinik's books) is git-ignored and removed from the index (`git rm -r --cached`); the files stay on disk and remain the working reference CLAUDE.md points to. Purging it from earlier commits is a separate history rewrite, done only with the user's go-ahead.
+- **Alternatives:** keep it tracked in a private repository (the summaries are close paraphrase of copyrighted books).
+- **Consequence:** a fresh clone has no `docs/veinik/`; the author copies it in from a local backup. No code or test reads it.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

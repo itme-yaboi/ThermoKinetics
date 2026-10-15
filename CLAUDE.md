@@ -15,7 +15,7 @@ It is used for engineering consulting (thermal and balance-of-plant analysis for
 
 ## Read before writing code
 
-Everything needed from Veinik's books is in `docs/veinik/`. **Do not ask for or try to OCR the source books.** Start with `docs/veinik/00_README.md`, then read in order:
+Everything needed from Veinik's books is in `docs/veinik/` (local only, git-ignored, D-37). **Do not ask for or try to OCR the source books.** Start with `docs/veinik/00_README.md`, then read in order:
 
 1. `01_core_framework.md` — charge, force, first law, equations of state, coupling, capacity
 2. `02_thermokinetics.md` — fluxes, dissipation, entropy production, Onsager, couples

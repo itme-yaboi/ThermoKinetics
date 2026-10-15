@@ -7,6 +7,8 @@ _reference/veinik_source/*_ocr.txt
 _reference/veinik_source/*_RU.txt
 # notes digested from the copyrighted book: local only (D-36)
 _reference/veinik_source/notes_by_section_*.md
+# curated summaries of Veinik's books: local only (D-37)
+docs/veinik/
 # copyrighted papers: local only (D-30)
 _reference/graphing/*.pdf
 # personal Claude Code settings
