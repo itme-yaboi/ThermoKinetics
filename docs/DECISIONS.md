@@ -679,6 +679,7 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 7. **Cost:** run time is about 1 ms per force evaluation in the dome and 2 ms per Hessian; first compilation of the nested dual numbers through IAPWS-95 is slow (about 25 s for forces and 80 s for the Hessian, once per model). The full suite still runs in about 7.3 min; the two-phase kernel tests take about 2 min, mostly compilation.
 8. **The flash must end on a root (a bug found by the 10a suite):** when the saturation solve fails at the inversion's temperature (near T_c, where the 0.1 % warm start is off and Clapeyron's result does not polish), the state goes to the flash. For a superheated state there, the bracket closes on the isochore's dome boundary with the lever residual still negative, and the flash reported a "two-phase" state (water at 646.9 K, 0.77 MPa came back at 429.8 K). The flash now accepts only a converged root, |residual| ≤ 1e-8 max(|s|, R̄) with 0 ≤ x ≤ 1, and otherwise reports "not two-phase", so the phase test keeps the single-phase state.
 - **To review:** item 1 (inversion first) and item 3 (the warm-start rule).
+- **Review (user, 2026-10-15):** item 3 accepted. Item 1 still open.
 
 ---
 
