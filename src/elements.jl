@@ -33,29 +33,34 @@ Fixed forces, infinite capacity (Dirichlet). The keyword form takes temperature 
 (stored as the force −p). With a `material` (a fluid with thermal, volumetric and species
 charges), the reservoir also fixes the chemical potentials μ(T, p) and the specific entropy
 of that fluid, so it can supply or absorb a stream. The pair form takes raw forces,
-P = ∂U/∂E, for any domain.
+P = ∂U/∂E, for any domain. A force may be a function of time, `domain => t -> P(t)`: a
+prescribed boundary history, such as a drive velocity. Pass its discontinuities to
+`simulate` as `tstops`.
 """
 struct Reservoir
     name::Symbol
     domains::Vector{FormOfMotion}
-    forces::Vector{Float64}
+    forces::Vector{Float64}             # values at t = 0
+    fns::Vector{Any}                    # `nothing`, or a function t -> force, per domain
     material::Union{Nothing,Material}   # fluid held, if the reservoir can exchange mass
     s::Float64                          # specific entropy of that fluid [J/(kg K)] (NaN without one)
     y::Vector{Float64}                  # its mass fractions, in the order of its Species domains
-    function Reservoir(name::Symbol, pairs::Pair{<:FormOfMotion,<:Real}...)
+    function Reservoir(name::Symbol, pairs::Pair{<:FormOfMotion}...)
         doms = FormOfMotion[first(p) for p in pairs]
-        vals = Float64[last(p) for p in pairs]
-        return Reservoir(name, doms, vals, nothing, NaN, Float64[])
+        fns = Any[last(p) isa Real ? nothing : last(p) for p in pairs]
+        vals = Float64[last(p) isa Real ? last(p) : last(p)(0.0) for p in pairs]
+        return Reservoir(name, doms, vals, nothing, NaN, Float64[]; fns)
     end
     function Reservoir(name::Symbol, doms::Vector{FormOfMotion}, vals::Vector{Float64},
-                       material::Union{Nothing,Material}, s::Float64, y::Vector{Float64})
+                       material::Union{Nothing,Material}, s::Float64, y::Vector{Float64};
+                       fns::Vector{Any} = Any[nothing for _ in doms])
         isempty(doms) && throw(ArgumentError("a reservoir needs at least one fixed force"))
         allunique(doms) || throw(ArgumentError("duplicate domains in reservoir :$name"))
         all(isfinite, vals) || throw(ArgumentError("reservoir forces must be finite"))
         for (d, v) in zip(doms, vals)
             d isa Thermal && _check_positive(v, "reservoir temperature")
         end
-        return new(name, doms, vals, material, s, y)
+        return new(name, doms, vals, fns, material, s, y)
     end
 end
 
@@ -79,14 +84,37 @@ end
 
 domains(r::Reservoir) = Tuple(r.domains)
 
-function reservoir_force(r::Reservoir, d::FormOfMotion)
+function reservoir_force(r::Reservoir, d::FormOfMotion, t::Real = 0.0)
     i = findfirst(==(d), r.domains)
     i === nothing && throw(ArgumentError("reservoir :$(r.name) has no $(d) force"))
-    return r.forces[i]
+    return r.fns[i] === nothing ? r.forces[i] : Float64(r.fns[i](t))
 end
 
-has_domain(x::Union{Body,Reservoir}, d::FormOfMotion) = d in domains(x)
-has_thermal(x::Union{Body,Reservoir}) = has_domain(x, Thermal())
+"""
+    Junction(name, domains...)
+
+A zero-capacity node: it holds no charge and no energy. Its forces are algebraic unknowns
+fixed by "net charge flux in = 0" for each domain (a Kirchhoff current law, a massless
+mechanical node): an index-1 DAE row in the mass-matrix form (DESIGN §6.2). Thermal and
+species junctions are not allowed: a zero-capacity node cannot hold entropy, and mixing needs
+a thermal DOF.
+"""
+struct Junction
+    name::Symbol
+    domains::Vector{FormOfMotion}
+    function Junction(name::Symbol, doms::FormOfMotion...)
+        isempty(doms) && throw(ArgumentError("a junction needs at least one form of motion"))
+        allunique(doms) || throw(ArgumentError("duplicate domains in junction :$name"))
+        any(d -> d isa Thermal || d isa Species, doms) &&
+            throw(ArgumentError("junctions are non-thermal and hold no mass: no Thermal or Species"))
+        return new(name, collect(FormOfMotion, doms))
+    end
+end
+
+domains(j::Junction) = Tuple(j.domains)
+
+has_domain(x::Union{Body,Reservoir,Junction}, d::FormOfMotion) = d in domains(x)
+has_thermal(x::Union{Body,Reservoir,Junction}) = has_domain(x, Thermal())
 
 # --- conductor laws ------------------------------------------------------------------------
 
@@ -554,4 +582,91 @@ outlet_flow(o::PassThroughOutlet, p, t) = _nonneg_flow(o.mdot(t), "outlet")
 function _nonneg_flow(m, what)
     m >= 0 || throw(ArgumentError("prescribed $what mass flow must be ≥ 0, got $m"))
     return m
+end
+
+
+# --- converters (DESIGN §6) -------------------------------------------------------------------
+
+"""
+    Converter(W, domains)
+
+An ideal multi-port converter. Port k, on `domains[k]`, receives the charge flux
+F_k = Σ_j W_kj P_j, where P_j are the port forces. W must be exactly antisymmetric, so
+Σ P_k F_k = Pᵀ W P ≡ 0: power is conserved and no entropy is produced (the reversible, Poisson
+part of GENERIC). It is the one connection that does not conserve each charge
+(non-negotiable 1). The thermal form of motion is never converted. Join with
+`connect!(sys, conv, node_1, …, node_n)`.
+"""
+struct Converter{N,NN}
+    W::SMatrix{N,N,Float64,NN}
+    domains::NTuple{N,FormOfMotion}
+    function Converter(W::AbstractMatrix, doms::Tuple)
+        N = length(doms)
+        N >= 2 || throw(ArgumentError("a converter needs at least two ports"))
+        size(W) == (N, N) || throw(ArgumentError("W must be $N × $N for $N ports"))
+        all(d -> d isa FormOfMotion, doms) || throw(ArgumentError("ports must be forms of motion"))
+        any(d -> d isa Thermal, doms) && throw(ArgumentError("thermal charge (entropy) is never converted"))
+        W == -transpose(W) || throw(ArgumentError("W must be exactly antisymmetric (power conservation)"))
+        return new{N,N * N}(SMatrix{N,N,Float64}(W), Tuple(doms))
+    end
+end
+
+"""
+    Gyrator(r; a, b)
+
+Two-port converter: J_a = r P_b and J_b = −r P_a. Examples:
+- a piston of area A between a gas volume and a mass: `Gyrator(A; a = Volumetric(), b = Momentum())`;
+- the atmosphere on the other face: `Gyrator(-A; …)`.
+"""
+function Gyrator(r::Real; a::FormOfMotion, b::FormOfMotion)
+    (isfinite(r) && r != 0) || throw(ArgumentError("gyrator ratio must be finite and non-zero"))
+    return Converter([0.0 r; -r 0.0], (a, b))
+end
+
+"""
+    InductorBranch()
+
+The 3-port converter that puts an inductor body (flux linkage Λ, force i) between two electrical
+nodes a and b: dq_a = −i, dq_b = +i, dΛ = φ_a − φ_b. Connect it as
+`connect!(sys, InductorBranch(), a, b, inductor)`.
+"""
+InductorBranch() = Converter([0.0 0.0 -1.0; 0.0 0.0 1.0; 1.0 -1.0 0.0], (Electrical(), Electrical(), FluxLinkage()))
+
+"""
+    Transformer(r; a, b, τ = 1e-4)
+
+Ideal transformer between ports a and b: forces P_a = r P_b, flows F_a = λ and F_b = −r λ, so
+the power λ (P_a − r P_b) is zero on the constraint. Between two storing bodies this constraint
+is index 2. The library uses the index-reduced form: λ is an algebraic unknown whose row is the
+differentiated constraint with Baumgarte stabilization, d/dt(P_a − r P_b) + (P_a − r P_b)/τ = 0
+(index 1, D-29). The initial state must satisfy the constraint. Ends are bodies or
+constant-force reservoirs.
+"""
+struct Transformer
+    r::Float64
+    a::FormOfMotion
+    b::FormOfMotion
+    τ::Float64
+    function Transformer(r::Real; a::FormOfMotion, b::FormOfMotion, τ::Real = 1e-4)
+        (isfinite(r) && r != 0) || throw(ArgumentError("transformer ratio must be finite and non-zero"))
+        (a isa Thermal || b isa Thermal) && throw(ArgumentError("thermal charge (entropy) is never converted"))
+        _check_positive(τ, "stabilization time τ")
+        return new(Float64(r), a, b, Float64(τ))
+    end
+end
+
+"""
+    Switched(element; on)
+
+Gate an element by a schedule `on(t) -> Bool` (D-14): while off, the element moves nothing and
+produces nothing. Pass the switching times to `simulate` as `tstops`. Transformers cannot be
+switched (their algebraic row would be undefined).
+"""
+struct Switched{E,F}
+    element::E
+    on::F
+    function Switched(element; on)
+        element isa Transformer && throw(ArgumentError("a transformer cannot be switched"))
+        return new{typeof(element),typeof(on)}(element, on)
+    end
 end

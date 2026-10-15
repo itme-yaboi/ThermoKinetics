@@ -30,6 +30,22 @@ conductor material φ serves. φ has no absolute zero, so only differences enter
 """
 struct Electrical <: FormOfMotion end
 
+"""
+Kinetic translation (one axis): charge momentum p [kg m/s], force velocity w [m/s]
+(Veinik (7); 04). The inertial view (inertia force × displacement, (9)) is the same
+phenomenon seen from outside, so it is never a separate domain.
+"""
+struct Momentum <: FormOfMotion end
+
+"Kinetic rotation: charge angular momentum L [kg m²/s], force angular velocity ω [rad/s] ((8))."
+struct AngularMomentum <: FormOfMotion end
+
+"""
+The kinetic form of the electrical domain: charge flux linkage Λ [Wb = V s], force current
+i [A]. An inductor stores it, and an inductor branch converts it to charge (a 3-port converter).
+"""
+struct FluxLinkage <: FormOfMotion end
+
 charge_symbol(::Thermal) = :S
 charge_unit(::Thermal) = "J/K"
 force_symbol(::Thermal) = :T
@@ -50,6 +66,21 @@ charge_unit(::Species) = "kg"
 force_symbol(::Species) = :μ
 force_unit(::Species) = "J/kg"
 
+charge_symbol(::Momentum) = :p
+charge_unit(::Momentum) = "kg m/s"
+force_symbol(::Momentum) = :w
+force_unit(::Momentum) = "m/s"
+
+charge_symbol(::AngularMomentum) = :L
+charge_unit(::AngularMomentum) = "kg m^2/s"
+force_symbol(::AngularMomentum) = :ω
+force_unit(::AngularMomentum) = "rad/s"
+
+charge_symbol(::FluxLinkage) = :Λ
+charge_unit(::FluxLinkage) = "Wb"
+force_symbol(::FluxLinkage) = :i
+force_unit(::FluxLinkage) = "A"
+
 "Number of state slots the charge occupies (vector charges such as momentum take more)."
 ncomponents(::FormOfMotion) = 1
 
@@ -65,3 +96,6 @@ default_force_atol(::Thermal) = 1e-8      # K
 default_force_atol(::Volumetric) = 1e-4   # Pa
 default_force_atol(::Species) = 1e-6      # J/kg
 default_force_atol(::Electrical) = 1e-8   # V
+default_force_atol(::Momentum) = 1e-9     # m/s
+default_force_atol(::AngularMomentum) = 1e-8   # rad/s
+default_force_atol(::FluxLinkage) = 1e-9  # A

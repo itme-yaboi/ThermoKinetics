@@ -127,7 +127,7 @@ internal_energy(s::ConstantCapacitySolid, E) = s.m * s.c * s.T_ref * exp(E[1] / 
     charges_at(mat; kwargs...)
 
 Charges of a body made of `mat` at a given state. Solids: `T`. Ideal gas: `T` and two of
-`m`, `p`, `V`. Elastic volume: `V` or `p`. Capacitor: `φ` or `q`.
+`m`, `p`, `V`. Elastic volume: `V` or `p`. Capacitor: `φ` or `q`. Mass: `w` or `p`. Rotor: `ω` or `L`. Inductor: `i` or `Λ`.
 """
 function charges_at(s::ConstantCapacitySolid; T::Real)
     _check_positive(T, "temperature")
@@ -247,6 +247,59 @@ internal_energy(c::LinearCapacitor, E) = E[1]^2 / (2c.C)
 function charges_at(c::LinearCapacitor; φ = nothing, q = nothing)
     (φ === nothing) == (q === nothing) && throw(ArgumentError("give exactly one of φ or q"))
     return SVector(Float64(q === nothing ? c.C * φ : q))
+end
+
+# --- kinetic stores (uncoupled, quadratic) ------------------------------------------------------
+
+"""
+    InertialMass(m)
+
+A rigid mass m > 0 [kg] moving along one axis: one form of motion (momentum),
+U(p) = p²/(2m), so w = p/m. A pure accumulator; join it to other domains with converters
+(e.g. a piston: `Gyrator(A; a = Volumetric(), b = Momentum())`).
+"""
+struct InertialMass <: Material
+    m::Float64
+    InertialMass(m::Real) = (_check_positive(m, "mass"); new(m))
+end
+domains(::InertialMass) = (Momentum(),)
+internal_energy(b::InertialMass, E) = E[1]^2 / (2b.m)
+function charges_at(b::InertialMass; w = nothing, p = nothing)
+    (w === nothing) == (p === nothing) && throw(ArgumentError("give exactly one of w or p"))
+    return SVector(Float64(p === nothing ? b.m * w : p))
+end
+
+"""
+    RotationalInertia(I)
+
+A rotor with moment of inertia I > 0 [kg m²]: U(L) = L²/(2I), so ω = L/I.
+"""
+struct RotationalInertia <: Material
+    I::Float64
+    RotationalInertia(I::Real) = (_check_positive(I, "moment of inertia"); new(I))
+end
+domains(::RotationalInertia) = (AngularMomentum(),)
+internal_energy(b::RotationalInertia, E) = E[1]^2 / (2b.I)
+function charges_at(b::RotationalInertia; ω = nothing, L = nothing)
+    (ω === nothing) == (L === nothing) && throw(ArgumentError("give exactly one of ω or L"))
+    return SVector(Float64(L === nothing ? b.I * ω : L))
+end
+
+"""
+    LinearInductor(L)
+
+An ideal inductor, L > 0 [H]: U(Λ) = Λ²/(2L), so i = Λ/L. Connect it into a circuit with an
+`InductorBranch` converter.
+"""
+struct LinearInductor <: Material
+    L::Float64
+    LinearInductor(L::Real) = (_check_positive(L, "inductance"); new(L))
+end
+domains(::LinearInductor) = (FluxLinkage(),)
+internal_energy(b::LinearInductor, E) = E[1]^2 / (2b.L)
+function charges_at(b::LinearInductor; i = nothing, Λ = nothing)
+    (i === nothing) == (Λ === nothing) && throw(ArgumentError("give exactly one of i or Λ"))
+    return SVector(Float64(Λ === nothing ? b.L * i : Λ))
 end
 
 # --- composite (coupling groups) -------------------------------------------------------------

@@ -185,11 +185,52 @@ struct CompiledOutlet{O,N}
     led::Int                        # received m_1..m_N, S, U
 end
 
+"An ideal converter: port forces P (from the buffer), fluxes F = W P into the port charge targets."
+struct CompiledConverter{N,NN}
+    name::Symbol
+    W::SMatrix{N,N,Float64,NN}
+    nodes::NTuple{N,Int}
+    f::NTuple{N,Int}
+    c::NTuple{N,Int}
+end
+
+"One end of a transformer: the body's material, state offset, size and port slot; `Nothing` for a reservoir."
+struct TransformerEnd{M,N}
+    mat::M
+    off::Int
+    k::Int
+end
+
+struct CompiledTransformer{EA,EB}
+    name::Symbol
+    r::Float64
+    τ::Float64
+    a::Int; b::Int
+    fa::Int; fb::Int
+    ca::Int; cb::Int
+    λ::Int                          # state (and residual) index of the algebraic flux λ
+    ea::EA; eb::EB
+end
+
+"A gated element (D-14): applied only while `on(t)`."
+struct CompiledSwitched{C,F}
+    name::Symbol
+    inner::C
+    on::F
+end
+
+_unwrap(c) = c isa CompiledSwitched ? c.inner : c
+
 """
     CompiledSystem
 
-Flat, type-stable lowering of a `ThermoSystem`. State layout: `u = [u_phys; q_ledger]`.
-`u_phys` holds the bodies' charges. `q_ledger` holds, element by element in insertion order:
+Flat lowering of a `ThermoSystem`. State layout: `u = [u_phys; u_alg; q_ledger]`.
+- `u_phys` holds the bodies' charges.
+- `u_alg` holds the algebraic unknowns of the mass-matrix DAE (DESIGN §6.2, D-29): each
+  junction's forces, then each transformer's flux λ. Their rows of `du` are residuals (zero
+  mass-matrix rows): a junction's net charge inflow, a transformer's d/dt(P_a − r P_b) +
+  (P_a − r P_b)/τ.
+- `q_ledger` holds, element by element in insertion order:
 - conductors: entropy production (two slots for kernel B: dissipation and conduction);
 - streams: production;
 - pumps: production, then external work supplied;
@@ -199,8 +240,8 @@ Flat, type-stable lowering of a `ThermoSystem`. State layout: `u = [u_phys; q_le
 
 Then, for each reservoir: the charge received in each of its domains (entropy for
 `Thermal`), then energy. Ledgers never feed back into the dynamics (D-10). Forces live in a
-buffer aligned with the state: `P[1:nphys]` are the bodies' forces, followed by the
-reservoirs' fixed forces.
+buffer: `P[1:nphys]` are the bodies' forces (aligned with their charges), then the reservoirs'
+forces (some time-varying), then the junctions' forces (read from `u_alg`).
 """
 struct CompiledSystem
     sys::ThermoSystem
@@ -214,7 +255,14 @@ struct CompiledSystem
     reservoir_names::Vector{Symbol}
     reservoirs::Vector{Reservoir}
     res_force::Vector{Float64}
+    res_fns::Vector{Tuple{Int,Any}}     # (force-buffer index, t -> force) for time-varying forces
     res_led::Vector{Int}
+    # junctions: (force-buffer index, algebraic index) per junction domain
+    junction_names::Vector{Symbol}
+    junctions::Vector{Junction}
+    junction_slots::Vector{Vector{Tuple{Int,Int}}}
+    transformers::Vector{Any}
+    converted::Vector{FormOfMotion}     # domains whose totals converters/transformers change
     # per node (bodies then reservoirs)
     node_T::Vector{Int}                 # force index of T (0: no thermal DOF)
     node_S::Vector{Int}                 # du index receiving entropy (0: none)
@@ -233,13 +281,17 @@ struct CompiledSystem
     # lookup and sizes
     node_index::Dict{Symbol,Int}
     nphys::Int
+    nalg::Int
     nledger::Int
     u0::Vector{Float64}
     Pbuf::Vector{Float64}
+    tbreak::Base.RefValue{Float64}      # next discontinuity: time functions are left limits up to it
 end
 
 nbodies(cs::CompiledSystem) = length(cs.body_names)
-nnodes(cs::CompiledSystem) = length(cs.body_names) + length(cs.reservoir_names)
+nnodes(cs::CompiledSystem) = length(cs.body_names) + length(cs.reservoir_names) + length(cs.junction_names)
+"Number of solver unknowns that are not ledgers: bodies' charges plus algebraic unknowns."
+nstate(cs::CompiledSystem) = cs.nphys + cs.nalg
 
 body_names(cs::CompiledSystem) = copy(cs.body_names)
 reservoir_names(cs::CompiledSystem) = copy(cs.reservoir_names)
@@ -272,6 +324,8 @@ _nledger(::Stream) = 1
 _nledger(::IdealPump) = 2
 _nledger(el::FlowBoundary) = 2 + length(mass_slots(el.material)) + 2
 _nledger(el::PassThroughOutlet, nspecies::Int) = nspecies + 2
+_nledger(::Converter) = 0
+_nledger(::Transformer) = 0
 
 """
     compile(sys) -> CompiledSystem
@@ -282,11 +336,14 @@ function compile(sys::ThermoSystem)
     g = sys.graph
     body_labels = [n for n in sys.nodes if g[n] isa Body]
     res_labels = [n for n in sys.nodes if g[n] isa Reservoir]
-    nb, nr = length(body_labels), length(res_labels)
+    jun_labels = [n for n in sys.nodes if g[n] isa Junction]
+    nb, nr, nj = length(body_labels), length(res_labels), length(jun_labels)
     node_index = Dict{Symbol,Int}()
     for (i, n) in enumerate(body_labels); node_index[n] = i; end
     for (j, n) in enumerate(res_labels); node_index[n] = nb + j; end
-    node_obj(i) = i <= nb ? g[body_labels[i]] : g[res_labels[i-nb]]
+    for (j, n) in enumerate(jun_labels); node_index[n] = nb + nr + j; end
+    node_obj(i) = i <= nb ? g[body_labels[i]] : i <= nb + nr ? g[res_labels[i-nb]] : g[jun_labels[i-nb-nr]]
+    unwrap(el) = el isa Switched ? el.element : el
 
     # bodies: state layout (force slots coincide with charge slots)
     slots = BodySlot[]
@@ -303,27 +360,49 @@ function compile(sys::ThermoSystem)
     reservoirs = Reservoir[g[n] for n in res_labels]
     res_fstart = Int[]
     res_force = Float64[]
+    res_fns = Tuple{Int,Any}[]
     for r in reservoirs
         push!(res_fstart, nphys + length(res_force) + 1)
+        for (k, f) in enumerate(r.fns)
+            f === nothing || push!(res_fns, (nphys + length(res_force) + k, f))
+        end
         append!(res_force, r.forces)
     end
+    junctions = Junction[g[n] for n in jun_labels]
+
+    # algebraic unknowns: junction forces, then transformer fluxes
+    nalg_j = sum((length(j.domains) for j in junctions); init = 0)
+    tr_labels = [e for e in sys.elements if unwrap(g[e]) isa Transformer]
+    nalg = nalg_j + length(tr_labels)
+    jun_fstart = Int[]
+    jun_astart = Int[]
+    let fpos = nphys + length(res_force) + 1, apos = nphys + 1
+        for j in junctions
+            push!(jun_fstart, fpos); push!(jun_astart, apos)
+            fpos += length(j.domains); apos += length(j.domains)
+        end
+    end
+    tr_alg = Dict(e => nphys + nalg_j + k for (k, e) in enumerate(tr_labels))
 
     # per-node lookup
-    ndoms(i) = i <= nb ? collect(FormOfMotion, domains(slots[i].body)) : reservoirs[i-nb].domains
+    ndoms(i) = i <= nb ? collect(FormOfMotion, domains(slots[i].body)) :
+               i <= nb + nr ? reservoirs[i-nb].domains : junctions[i-nb-nr].domains
     function force_index(i::Int, d::FormOfMotion)
         k = findfirst(==(d), ndoms(i))
         k === nothing && return 0
-        return i <= nb ? body_offset[i] + k - 1 : res_fstart[i-nb] + k - 1
+        i <= nb && return body_offset[i] + k - 1
+        i <= nb + nr && return res_fstart[i-nb] + k - 1
+        return jun_fstart[i-nb-nr] + k - 1
     end
     species_of(i) = [d for d in ndoms(i) if d isa Species]
     yindex(i, d) = i <= nb ? 0 : findfirst(==(d), species_of(i))
 
     # ledger layout, element by element in insertion order, then reservoirs
     elem_labels = copy(sys.elements)
-    led = nphys + 1
+    led = nphys + nalg + 1
     elem_led = Dict{Symbol,UnitRange{Int}}()
     for e in elem_labels
-        el = g[e]
+        el = unwrap(g[e])
         n = el isa PassThroughOutlet ? _nledger(el, length(species_of(node_index[port_node(sys, e, :a)]))) : _nledger(el)
         elem_led[e] = led:led+n-1
         led += n
@@ -333,16 +412,21 @@ function compile(sys::ThermoSystem)
         push!(res_led, led)
         led += length(r.domains) + 1
     end
-    nledger_total = led - 1 - nphys
+    nledger_total = led - 1 - nphys - nalg
 
     function charge_target(i::Int, d::FormOfMotion)
         i <= nb && return force_index(i, d)                  # a body's charge slot
+        if i > nb + nr                                       # a junction: its residual row
+            k = findfirst(==(d), junctions[i-nb-nr].domains)
+            return k === nothing ? 0 : jun_astart[i-nb-nr] + k - 1
+        end
         k = findfirst(==(d), reservoirs[i-nb].domains)
         return k === nothing ? 0 : res_led[i-nb] + k - 1
     end
-    node_T = [force_index(i, Thermal()) for i in 1:nb+nr]
-    node_S = [charge_target(i, Thermal()) for i in 1:nb+nr]
-    node_U = [i <= nb ? 0 : res_led[i-nb] + length(reservoirs[i-nb].domains) for i in 1:nb+nr]
+    nn = nb + nr + nj
+    node_T = [force_index(i, Thermal()) for i in 1:nn]
+    node_S = [charge_target(i, Thermal()) for i in 1:nn]
+    node_U = [nb < i <= nb + nr ? res_led[i-nb] + length(reservoirs[i-nb].domains) : 0 for i in 1:nn]
 
     compiled = Any[]
     conductor_labels = Symbol[]
@@ -352,8 +436,10 @@ function compile(sys::ThermoSystem)
     ext_charges = Tuple{FormOfMotion,Int}[]
     touch = Tuple{Vector{Int},UnitRange{Int}}[]
     moves = Tuple{Vector{Int},Vector{FormOfMotion},Bool}[]
-    active_set = Set{Int}()
+    active_set = Set{Int}(nphys+1:nphys+nalg)                # every algebraic unknown
     mark_active!(targets) = foreach(t -> (0 < t <= nphys && push!(active_set, t)), targets)
+    transformers = Any[]
+    converted = FormOfMotion[]
 
     function fluid_node(e, i, label)
         node = node_obj(i)
@@ -372,8 +458,10 @@ function compile(sys::ThermoSystem)
     end
 
     for e in elem_labels
-        el = g[e]
+        sw = g[e] isa Switched ? g[e] : nothing
+        el = unwrap(g[e])
         r = elem_led[e]
+        ncompiled = length(compiled)
         if el isa Conductor
             a, b = port_node(sys, e, :a), port_node(sys, e, :b)
             hl = third_node(el.dissipation)
@@ -471,9 +559,53 @@ function compile(sys::ThermoSystem)
             push!(touch, ([iu], r))
             push!(moves, ([iu], collect(FormOfMotion, sp), true))
             mark_active!(c.cu); mark_active!((node_S[iu],))
+        elseif el isa Converter
+            N = length(el.domains)
+            labels = [port_node(sys, e, Symbol(:p, k)) for k in 1:N]
+            idx = [node_index[l] for l in labels]
+            for k in 1:N
+                force_index(idx[k], el.domains[k]) == 0 &&
+                    throw(ArgumentError("converter :$e port $k needs $(el.domains[k]) at :$(labels[k])"))
+            end
+            c = CompiledConverter(e, el.W, Tuple(idx), ntuple(k -> force_index(idx[k], el.domains[k]), N),
+                                  ntuple(k -> charge_target(idx[k], el.domains[k]), N))
+            push!(compiled, c)
+            push!(touch, (idx, r))
+            push!(moves, (idx, unique(collect(FormOfMotion, el.domains)), true))   # not conserved: anchors
+            foreach(d -> d in converted || push!(converted, d), el.domains)
+            mark_active!(c.c)
+        elseif el isa Transformer
+            a, b = port_node(sys, e, :a), port_node(sys, e, :b)
+            ia, ib = node_index[a], node_index[b]
+            ends = Any[]
+            for (n, i, d) in ((a, ia, el.a), (b, ib, el.b))
+                force_index(i, d) == 0 && throw(ArgumentError("transformer :$e needs $d at :$n"))
+                obj = node_obj(i)
+                if obj isa Body
+                    k = findfirst(==(d), collect(domains(obj)))
+                    push!(ends, TransformerEnd{typeof(obj.material),ncharges(obj.material)}(obj.material, body_offset[i], k))
+                elseif obj isa Reservoir
+                    obj.fns[findfirst(==(d), obj.domains)] === nothing ||
+                        throw(ArgumentError("transformer :$e: the reservoir force at :$n must be constant"))
+                    push!(ends, TransformerEnd{Nothing,0}(nothing, 0, 0))
+                else
+                    throw(ArgumentError("transformer :$e: ends must be bodies or reservoirs, not junctions"))
+                end
+            end
+            c = CompiledTransformer(e, el.r, el.τ, ia, ib, force_index(ia, el.a), force_index(ib, el.b),
+                                    charge_target(ia, el.a), charge_target(ib, el.b), tr_alg[e], ends[1], ends[2])
+            push!(compiled, c); push!(transformers, c)
+            push!(touch, ([ia, ib], r))
+            push!(moves, ([ia, ib], unique(FormOfMotion[el.a, el.b]), true))
+            foreach(d -> d in converted || push!(converted, d), (el.a, el.b))
+            mark_active!((c.ca, c.cb))
         else
             error("unsupported element $(typeof(el))")
         end
+        if sw !== nothing                    # gate the element just compiled
+            compiled[end] = CompiledSwitched(e, compiled[end], sw.on)
+        end
+        length(compiled) == ncompiled + 1 || error("internal: element :$e compiled $(length(compiled) - ncompiled) times")
     end
 
     body_groups = _group_by_type([s for s in slots])
@@ -483,19 +615,22 @@ function compile(sys::ThermoSystem)
         element_ref[c.name] = (gi, pos)
     end
 
-    u0 = zeros(nphys + nledger_total)
+    u0 = zeros(nphys + nalg + nledger_total)
     for s in slots
         u0[s.offset:s.offset+ncharges(s.body.material)-1] .= s.body.E0
     end
-    Pbuf = vcat(zeros(nphys), res_force)
+    Pbuf = vcat(zeros(nphys), res_force, zeros(nalg_j))
+    junction_slots = [[(jun_fstart[j] + k - 1, jun_astart[j] + k - 1) for k in 1:length(junctions[j].domains)]
+                      for j in 1:nj]
 
     return CompiledSystem(sys, body_groups, element_groups,
                           body_labels, Body[g[n] for n in body_labels], body_offset,
-                          res_labels, reservoirs, res_force, res_led,
+                          res_labels, reservoirs, res_force, res_fns, res_led,
+                          jun_labels, junctions, junction_slots, transformers, converted,
                           node_T, node_S, node_U,
                           elem_labels, element_ref, conductor_labels, prod_led, work_led, bound_led, ext_charges,
                           touch, moves, sort(collect(active_set)),
-                          node_index, nphys, nledger_total, u0, Pbuf)
+                          node_index, nphys, nalg, nledger_total, u0, Pbuf, Ref(Inf))
 end
 
 # --- the right-hand side ------------------------------------------------------------------------
@@ -514,12 +649,18 @@ function _body_forces!(P, group::Vector{<:BodySlot}, u)
     return nothing
 end
 
-"The force buffer for state `u`: body forces, then reservoir forces."
-function force_buffer(cs::CompiledSystem, u::AbstractVector)
+"The force buffer for state `u` at time `t`: body forces, reservoir forces, junction forces."
+function force_buffer(cs::CompiledSystem, u::AbstractVector, t::Real = 0.0)
     Tel = promote_type(eltype(u), Float64)
     P = Tel === Float64 ? cs.Pbuf : Vector{Tel}(undef, length(cs.Pbuf))
     for j in eachindex(cs.res_force)
         P[cs.nphys+j] = cs.res_force[j]
+    end
+    for (i, f) in cs.res_fns
+        P[i] = f(t)
+    end
+    for slots in cs.junction_slots, (fi, ai) in slots
+        P[fi] = u[ai]
     end
     for grp in cs.body_groups
         _body_forces!(P, grp, u)
@@ -758,6 +899,57 @@ function _apply!(du, P, u, c::CompiledOutlet{O,N}, cs, t) where {O,N}
     return nothing
 end
 
+function _apply!(du, P, u, c::CompiledConverter{N}, cs, t) where {N}
+    F = c.W * SVector{N}(ntuple(k -> P[c.f[k]], Val(N)))
+    for k in 1:N
+        _charge!(du, cs, c.nodes[k], c.c[k], F[k], P[c.f[k]])
+    end
+    return nothing
+end
+
+"Converter accessor: port forces, fluxes and the (zero) power."
+function transfer(c::CompiledConverter{N}, P, u, cs::CompiledSystem, t) where {N}
+    Pp = SVector{N}(ntuple(k -> P[c.f[k]], Val(N)))
+    F = c.W * Pp
+    return (; P = Pp, F, power = sum(Pp .* F))
+end
+
+function _apply!(du, P, u, c::CompiledTransformer, cs, t)
+    λ = u[c.λ]
+    _charge!(du, cs, c.a, c.ca, λ, P[c.fa])
+    _charge!(du, cs, c.b, c.cb, -c.r * λ, P[c.fb])
+    return nothing
+end
+
+"Transformer accessor: the flux λ, the constraint residual g = P_a − r P_b, and the power λ g."
+function transfer(c::CompiledTransformer, P, u, cs::CompiledSystem, t)
+    g = P[c.fa] - c.r * P[c.fb]
+    return (; λ = u[c.λ], g, power = u[c.λ] * g)
+end
+
+"d/dt of a transformer end's force: the Hessian row of its body's U, dotted with the charge rates."
+_dforce(e::TransformerEnd{Nothing,0}, u, du) = 0.0
+function _dforce(e::TransformerEnd{M,N}, u, du) where {M,N}
+    E = SVector{N}(ntuple(k -> u[e.off+k-1], Val(N)))
+    A = eos_matrix(e.mat, E)
+    return sum(ntuple(k -> A[e.k, k] * du[e.off+k-1], Val(N)))
+end
+
+"Second pass: each transformer's residual row, d/dt(P_a − r P_b) + (P_a − r P_b)/τ (index-reduced, D-29)."
+function _transformer_rows!(du, P, u, cs::CompiledSystem)
+    for c in cs.transformers
+        g = P[c.fa] - c.r * P[c.fb]
+        du[c.λ] = _dforce(c.ea, u, du) - c.r * _dforce(c.eb, u, du) + g / c.τ
+    end
+    return nothing
+end
+
+function _apply!(du, P, u, c::CompiledSwitched, cs, t)
+    c.on(t) && _apply!(du, P, u, c.inner, cs, t)
+    return nothing
+end
+transfer(c::CompiledSwitched, P, u, cs::CompiledSystem, t) = transfer(c.inner, P, u, cs, t)
+
 function _apply_group!(du, P, u, group::Vector, cs, t)
     for c in group
         _apply!(du, P, u, c, cs, t)
@@ -768,15 +960,24 @@ end
 """
     assemble!(du, u, cs, t)
 
-Physical and ledger rates in one pass, into the full-length `du`. Only `u[1:nphys]` is read.
-All bookkeeping is done here.
+Physical rates, algebraic residuals and ledger rates, into the full-length `du`. Only
+`u[1:nphys+nalg]` is read. All bookkeeping is done here. A second pass forms the transformer
+rows, which need every body's charge rate.
 """
 function assemble!(du, u, cs::CompiledSystem, t)
-    P = force_buffer(cs, u)
+    if !all_valid(cs, u)            # a trial stage outside the materials' states: NaN rejects the step
+        fill!(du, convert(eltype(du), NaN))
+        return nothing
+    end
+    # time-varying forces and gates are left limits up to the next discontinuity (D-29): a step
+    # ending exactly on a `tstop` must not see the next interval's values in its last stage
+    t = t < cs.tbreak[] ? t : prevfloat(cs.tbreak[])
+    P = force_buffer(cs, u, t)
     fill!(du, zero(eltype(du)))
     for grp in cs.element_groups
         _apply_group!(du, P, u, grp, cs, t)
     end
+    isempty(cs.transformers) || _transformer_rows!(du, P, u, cs)
     return nothing
 end
 
@@ -828,6 +1029,7 @@ bodies on its ports, and its ledger rows (and those of the reservoirs it touches
 them; ledger columns are empty.
 """
 function jacobian_sparsity(cs::CompiledSystem)
+    cs.nalg == 0 || error("jacobian_sparsity: DAE systems use a dense Jacobian (D-29)")
     n = cs.nphys + cs.nledger
     I, J = collect(1:n), collect(1:n)
     nb = nbodies(cs)

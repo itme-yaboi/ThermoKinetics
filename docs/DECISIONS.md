@@ -376,6 +376,45 @@ Each item lists what was built instead of the design text, and why.
 - **Consequence:** in a fresh clone, DESIGN §17.1 names every file exactly, but the PDFs must be copied in from the author's backups.
 - **Alternatives:** commit the papers (D-25 as written); rewrite history to purge the earlier blob. That is possible if the repository is ever published; ask first.
 
+### D-29 Slice 5 implementation: deviations from DESIGN.md — accepted (slice 5, 2026-10-14)
+1. **Transformers are index 2, not index 1** (DESIGN §6.2 corrected).
+   - Between two storing bodies the constraint P_a = r P_b involves only states, so λ needs one differentiation to appear.
+   - Built in index-reduced form: λ's algebraic row is d/dt(P_a − r P_b) + (P_a − r P_b)/τ, with Hessian rows by AD and Baumgarte τ = 1e-4 s by default. It is formed in a second assembly pass, after all fluxes.
+   - Power λ(P_a − r P_b) is zero on the manifold. The off-manifold mismatch is held at integrator tolerance and reported by `constraint_residual`.
+   - Initial charges must satisfy the constraint.
+   - Alternatives:
+     - gyrator-form fluxes F_a = μ P_b, F_b = −μ P_a (power-exact but singular at P_b = 0, e.g. a gear at rest);
+     - a stiff compliance (not ideal);
+     - index reduction by a symbolic layer (excluded, D-2);
+     - explicit elimination of λ inside the right-hand side (equivalent, but bypasses the DAE path the junctions need anyway).
+2. **Junctions are index-1 algebraic nodes** (as designed). Their charge-target rows accumulate net inflow, so Kirchhoff's law needs no special code. DAE systems use a **dense Jacobian** (no sparsity prototype yet).
+3. **Ideal converters `Converter(W, domains)`:** an exactly antisymmetric W across n ports on distinct nodes; thermal ports are forbidden.
+   - Convenience constructors `Gyrator(r; a, b)` and `InductorBranch()`.
+   - Inductors are bodies (`LinearInductor`, flux linkage Λ, force i), joined to circuits by the 3-port inductor-branch converter: dq_a = −i, dq_b = i, dΛ = φ_a − φ_b.
+   - A DC motor is a 4-port converter (winding plus rotor).
+   - Converters do not conserve their domains' totals, so `closure` skips converted domains, and `steady_state` treats converters as anchors.
+4. **`Momentum` is one-axis.** The vector `Momentum{N}` of DESIGN §1 is deferred until a model needs it.
+5. **Switching and time-varying reservoirs were pulled forward from "later"**, because E1/E2 need them.
+   - `Switched(element; on = t -> Bool)` gates an element's whole application (Boolean only; transformers cannot be switched).
+   - Reservoir forces may be functions of t: `domain => t -> P(t)`.
+   - Discontinuity times are passed as `tstops`.
+   - Accessor `transfer` on a switched element reports the inner element even while it is off.
+6. **`assemble!` returns NaN for states outside the materials' domains.** Before, a trial stage (e.g. V < 0 inside a rejected Rosenbrock stage) threw a `DomainError` before `isoutofdomain` could reject the step.
+7. **`closure` relative measures have floors of 1e-3 × |U₀| and 1e-3 × max(|S₀|, 1).** When almost nothing moves (a frictionless gas spring), round-off divided by round-off was meaningless; round-off in these sums scales with the magnitudes themselves.
+8. **"Exactly isentropic" checks are to the ulp, not bit-exact.** A charge with an identically zero rate can still move by ~1 ulp per run, because the dense LU of each implicit stage mixes rows. Tests use 1e-12 to 1e-13 relative.
+9. **E1 is shown by convergence**: the Carnot deficit and Ṡ_gen both fall about tenfold for a tenfold G. A strictly reversible bridge needs G → ∞. E2 (internal temperatures, (490)) and the Gouy–Stodola balance are checked exactly on the periodic cycle.
+10. **Left limits at discontinuities.**
+    - With `tstops`, time-varying reservoir forces and `Switched` gates are evaluated as left limits up to the next stop: the right-hand side uses min(t, prevfloat(next stop)).
+    - A discrete callback moves to the next interval once the step landing on the stop is accepted.
+    - Before this, the final Rosenbrock stage of a step ending on a stop saw the next interval's drive speed and gate state.
+11. **Ledger error control: an open question for the user (it touches D-10).**
+    - D-10 excludes ledgers from the integrator's error norm. When the physical states are easy to integrate but a ledger integrand is not, the ledgers become uncontrolled quadratures.
+      - Example: a prescribed drive makes V linear in t while the adiabats keep S fixed, so each 100 s leg is one step.
+      - Measured on the Carnot cycle: W off by 2–5 % (closure 2e-3 to 5e-3) without control; with control, W = Q_h − Q_c to 1e-8 (closure 4e-9).
+    - Built: `simulate(…; ledger_control = true)` adds the ledgers to the error norm (they still never feed back, and steady solves still exclude them). The default stays `false` per D-10.
+    - **Recommendation:** make `true` the default. Correctness and loss attribution matter more than speed, and `closure` exposes the problem but does not prevent it.
+    - Alternative: post-hoc high-order quadrature of the ledgers from dense output.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)

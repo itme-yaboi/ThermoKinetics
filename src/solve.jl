@@ -40,7 +40,13 @@ force tolerance (`default_force_atol`, times `atol_scale`) through its capacity 
 the initial state. Charge magnitudes are not used: entropy has an arbitrary zero (D-20).
 """
 function abstol_vector(cs::CompiledSystem; atol_scale::Real = 1.0, atol_ledger::Real = 1e-12)
-    tol = fill(Float64(atol_ledger), cs.nphys + cs.nledger)
+    tol = fill(Float64(atol_ledger), nstate(cs) + cs.nledger)
+    for (j, jn) in enumerate(cs.junctions), (k, d) in enumerate(jn.domains)   # junction forces
+        tol[cs.junction_slots[j][k][2]] = atol_scale * default_force_atol(d)
+    end
+    for c in cs.transformers                                                   # transformer fluxes
+        tol[c.λ] = atol_scale * 1e-10
+    end
     for (i, b) in enumerate(cs.bodies)
         off = cs.body_offset[i]
         N = ncharges(b.material)
@@ -60,12 +66,51 @@ end
     ODEProblem(cs, tspan; u0 = initial_state(cs), sparse = cs.nphys > 50)
 
 An `ODEProblem` for the compiled system. With `sparse = true` the Jacobian prototype comes
-from the graph topology.
+from the graph topology (ODE systems only). With algebraic unknowns (junctions, transformers),
+it is a mass-matrix DAE: 𝕄 = diag(1 for charges, 0 for algebraic rows, 1 for ledgers).
 """
 function SciMLBase.ODEProblem(cs::CompiledSystem, tspan; u0 = initial_state(cs),
                               sparse::Bool = cs.nphys > 50, kwargs...)
-    f = SciMLBase.ODEFunction{true}(ode_rhs!; jac_prototype = sparse ? jacobian_sparsity(cs) : nothing)
+    if cs.nalg == 0
+        f = SciMLBase.ODEFunction{true}(ode_rhs!; jac_prototype = sparse ? jacobian_sparsity(cs) : nothing)
+    else
+        M = Diagonal(vcat(ones(cs.nphys), zeros(cs.nalg), ones(cs.nledger)))
+        f = SciMLBase.ODEFunction{true}(ode_rhs!; mass_matrix = M)
+    end
     return SciMLBase.ODEProblem(f, u0, tspan, cs; kwargs...)
+end
+
+"""
+    consistent_state(cs, u; t = 0.0) -> u
+
+Solve the algebraic unknowns (junction forces, transformer fluxes) for the given charges, so
+the DAE starts consistent. Errors if a transformer's constraint P_a = r P_b is violated by the
+charges themselves: fix the initial charges instead.
+"""
+function consistent_state(cs::CompiledSystem, u::AbstractVector; t::Real = 0.0)
+    cs.nalg == 0 && return copy(u)
+    v = collect(Float64, u)
+    P = copy(force_buffer(cs, v, t))
+    for c in cs.transformers
+        g = P[c.fa] - c.r * P[c.fb]
+        abs(g) <= 1e-9 * max(abs(P[c.fa]), abs(c.r * P[c.fb]), 1e-12) ||
+            throw(ArgumentError("transformer :$(c.name): initial state violates P_a = r P_b (residual $g); " *
+                                "start from consistent charges"))
+    end
+    alg = cs.nphys+1:cs.nphys+cs.nalg
+    function resid!(r, x, p)
+        w = similar(x, length(v))
+        w .= v
+        w[alg] .= x
+        du = similar(w)
+        assemble!(du, w, p, t)
+        r .= view(du, alg)
+        return nothing
+    end
+    sol = SciMLBase.solve(NonlinearProblem(resid!, v[alg], cs), NewtonRaphson(); abstol = 1e-12)
+    SciMLBase.successful_retcode(sol) || error("could not initialize the algebraic unknowns: retcode $(sol.retcode)")
+    v[alg] .= sol.u
+    return v
 end
 
 """
@@ -73,15 +118,36 @@ end
 
 Integrate with the ledger states excluded from the error norm. Steps that would leave a
 material's valid states (e.g. a gas with V ≤ 0), or push a passive boundary uphill, are
-rejected. Other keywords (for example
+rejected. Pass the discontinuities of time-varying reservoir forces and `Switched` gates as
+`tstops`: they are evaluated as left limits up to each stop (D-29).
+
+`ledger_control = true` puts the ledgers under error control too (D-29 §10). It is needed
+whenever the ledger integrands vary while the physical states are easy to integrate, e.g. a
+prescribed drive: otherwise the ledgers are uncontrolled quadratures, and `closure` shows it. Other keywords (for example
 `saveat`) go to `solve`.
 """
 function simulate(cs::CompiledSystem, tspan; alg = Rodas5P(), reltol::Real = 1e-8, atol_scale::Real = 1.0,
-                  u0 = initial_state(cs), sparse::Bool = cs.nphys > 50, kwargs...)
+                  u0 = initial_state(cs), sparse::Bool = cs.nphys > 50 && cs.nalg == 0,
+                  ledger_control::Bool = false, kwargs...)
+    u0 = consistent_state(cs, u0; t = first(tspan))
     prob = SciMLBase.ODEProblem(cs, tspan; u0, sparse)
-    sol = SciMLBase.solve(prob, alg; reltol, abstol = abstol_vector(cs; atol_scale),
-                          internalnorm = PhysNorm(cs.nphys),
-                          isoutofdomain = (u, p, t) -> !admissible(p, u), kwargs...)
+    extra = cs.nalg == 0 ? (;) : (; initializealg = SciMLBase.NoInit())     # u0 is already consistent
+    # discontinuities (`tstops`): evaluate time functions as left limits up to the next stop, and
+    # move on to the next interval only once the step landing on the stop is accepted
+    stops = sort(collect(Float64, get(kwargs, :tstops, Float64[])))
+    nextstop(t) = (k = findfirst(>(t), stops); k === nothing ? Inf : stops[k])
+    cs.tbreak[] = nextstop(first(tspan))
+    advance = SciMLBase.DiscreteCallback((u, t, integ) -> t in stops, integ -> (cs.tbreak[] = nextstop(integ.t));
+                                         save_positions = (false, false))
+    cb = haskey(kwargs, :callback) ? SciMLBase.CallbackSet(kwargs[:callback], advance) : advance
+    rest = Base.structdiff(values(kwargs), NamedTuple{(:callback,)})
+    sol = try
+        SciMLBase.solve(prob, alg; reltol, abstol = abstol_vector(cs; atol_scale),
+                        internalnorm = PhysNorm(ledger_control ? length(u0) : nstate(cs)), callback = cb,
+                        isoutofdomain = (u, p, t) -> !admissible(p, u), extra..., rest...)
+    finally
+        cs.tbreak[] = Inf
+    end
     if !SciMLBase.successful_retcode(sol)
         v = passive_violations(cs, sol.u[end])
         isempty(v) || _throw_passive(v, sol.t[end])
@@ -114,10 +180,10 @@ function steady_state(cs::CompiledSystem; u0 = initial_state(cs))
     _check_anchored(cs)
     act = cs.active
     isempty(act) && return copy(u0)
-    base = collect(Float64, u0[1:cs.nphys])
+    base = collect(Float64, u0[1:nstate(cs)])
     function resid!(r, x, p)
-        ufull = zeros(eltype(x), p.nphys + p.nledger)
-        ufull[1:p.nphys] .= base
+        ufull = zeros(eltype(x), nstate(p) + p.nledger)
+        ufull[1:nstate(p)] .= base
         ufull[act] .= x
         if !admissible(p, ufull)         # e.g. a trial step to V < 0: reject it, do not throw
             fill!(r, convert(eltype(r), NaN))
@@ -161,7 +227,7 @@ Per physical slot, the charge equivalent of the absolute force: capacity 1/A_kk 
 max(|P_k|, 1). It sets each steady residual row's round-off floor (D-27).
 """
 function _charge_scales(cs::CompiledSystem, u::AbstractVector)
-    s = ones(cs.nphys)
+    s = ones(nstate(cs))
     for (i, b) in enumerate(cs.bodies)
         off = cs.body_offset[i]
         N = ncharges(b.material)
@@ -190,7 +256,7 @@ function _check_anchored(cs::CompiledSystem)
     # energy: any element connects its nodes; reservoirs, boundaries and outlets anchor
     parent = collect(1:nn)
     anchored = falses(nn)
-    for j in nb+1:nn; anchored[j] = true; end
+    for j in nb+1:nb+length(cs.reservoirs); anchored[j] = true; end
     for (nodes, _, isbdry) in cs.moves
         isbdry && foreach(i -> anchored[i] = true, nodes)
     end
@@ -204,7 +270,7 @@ function _check_anchored(cs::CompiledSystem)
         parent = collect(1:nn)
         anchored = falses(nn)
         involved = falses(nn)
-        for j in 1:nn-nb
+        for j in eachindex(cs.reservoirs)
             d in cs.reservoirs[j].domains && (anchored[nb+j] = true)
         end
         for (nodes, ds, isbdry) in cs.moves
@@ -264,10 +330,17 @@ end
 
 The force of `domain` at a body or reservoir: T, −p, μ, …
 """
-function force(cs::CompiledSystem, u::AbstractVector, name::Symbol, d::FormOfMotion)
+function force(cs::CompiledSystem, u::AbstractVector, name::Symbol, d::FormOfMotion; t::Real = 0.0)
     i = get(cs.node_index, name, 0)
     i == 0 && throw(ArgumentError("no node named :$name"))
-    i > nbodies(cs) && return reservoir_force(cs.reservoirs[i-nbodies(cs)], d)
+    nb, nr = nbodies(cs), length(cs.reservoirs)
+    nb < i <= nb + nr && return reservoir_force(cs.reservoirs[i-nb], d, t)
+    if i > nb + nr                                        # a junction: its algebraic unknown
+        j = i - nb - nr
+        k = findfirst(==(d), cs.junctions[j].domains)
+        k === nothing && throw(ArgumentError(":$name has no $d form of motion"))
+        return u[cs.junction_slots[j][k][2]]
+    end
     b = cs.bodies[i]
     k = findfirst(==(d), collect(domains(b.material)))
     k === nothing && throw(ArgumentError(":$name has no $d form of motion"))
@@ -295,7 +368,7 @@ function _element(cs::CompiledSystem, name::Symbol)
 end
 
 _eval(cs::CompiledSystem, u::AbstractVector, name::Symbol; t::Real = 0.0) =
-    transfer(_element(cs, name), copy(force_buffer(cs, u)), u, cs, t)
+    transfer(_element(cs, name), copy(force_buffer(cs, u, t)), u, cs, t)
 
 """
     flux(cs, u, conductor) -> NamedTuple
@@ -313,7 +386,7 @@ One conductor's transfer at state `u`:
 """
 function flux(cs::CompiledSystem, u::AbstractVector, name::Symbol)
     c = _element(cs, name)
-    c isa CompiledConductor || throw(ArgumentError(":$name is not a conductor; use mass_flow for flow elements"))
+    _unwrap(c) isa CompiledConductor || throw(ArgumentError(":$name is not a conductor; use mass_flow for flow elements"))
     tr = _eval(cs, u, name)
     a, b = port_node(cs.sys, name, :a), port_node(cs.sys, name, :b)
     return merge(tr, (; S_out_of_a = -tr.Q_a / tr.T_a, S_into_b = tr.Q_b / tr.T_b, a, b))
@@ -330,8 +403,33 @@ outlet (out of its node).
 """
 function mass_flow(cs::CompiledSystem, u::AbstractVector, name::Symbol; t::Real = 0.0)
     c = _element(cs, name)
-    c isa CompiledConductor && throw(ArgumentError(":$name is a conductor; use flux"))
+    _unwrap(c) isa CompiledConductor && throw(ArgumentError(":$name is a conductor; use flux"))
     return _eval(cs, u, name; t).mdot
+end
+
+"""
+    algebraic_index(cs, junction, domain)
+
+Index in the state (and in `rates`) of a junction's force for `domain`; its `rates` entry is
+the junction's net charge inflow (0 on a solution).
+"""
+function algebraic_index(cs::CompiledSystem, name::Symbol, d::FormOfMotion)
+    j = findfirst(==(name), cs.junction_names)
+    j === nothing && throw(ArgumentError("no junction named :$name"))
+    k = findfirst(==(d), cs.junctions[j].domains)
+    k === nothing && throw(ArgumentError("junction :$name has no $d form of motion"))
+    return cs.junction_slots[j][k][2]
+end
+
+"""
+    constraint_residual(cs, u, transformer; t = 0.0)
+
+g = P_a − r P_b for a transformer at state `u` (0 on the constraint manifold). The power
+mismatch λ g is the only place a transformer departs from exact power conservation (D-29).
+"""
+function constraint_residual(cs::CompiledSystem, u::AbstractVector, name::Symbol; t::Real = 0.0)
+    _element(cs, name) isa CompiledTransformer || throw(ArgumentError(":$name is not a transformer"))
+    return _eval(cs, u, name; t).g
 end
 
 _ledger_total(v, r::UnitRange{Int}) = sum(v[j] for j in r)
@@ -463,6 +561,9 @@ function energy_residual(cs::CompiledSystem, u::AbstractVector)
     ext = _external_energy(cs, du)
     r += ext
     scale += abs(ext)
+    for slots in cs.junction_slots, (_, ai) in slots           # a junction holds no energy: P_j × net inflow
+        r += u[ai] * du[ai]
+    end
     for n in cs.element_names
         tr = _eval(cs, u, n)
         for f in (:Q_a, :Q_b, :Q_h, :Q_d, :W, :E, :E_in)
@@ -504,7 +605,7 @@ function closure(cs::CompiledSystem, sol)
     S0 = total_entropy(cs, u0)
     X0, Y0 = _external_energy_terms(cs, u0), _external_entropy_terms(cs, u0)
     Sgen0 = sum(values(generated_entropy(cs, u0)); init = 0.0)
-    doms = _nonthermal_domains(cs)
+    doms = [d for d in _nonthermal_domains(cs) if !(d in cs.converted)]   # converted totals are not conserved
     Q0 = [total_charge(cs, u0, d) for d in doms]
     body_charge(u, d) = sum((abs(u[cs.body_offset[i]+k-1]) for (i, b) in enumerate(cs.bodies)
                              for (k, dd) in enumerate(domains(b.material)) if dd == d); init = 0.0)
@@ -526,7 +627,11 @@ function closure(cs::CompiledSystem, sol)
             eQ = max(eQ, abs(total_charge(cs, u, d) - Q0[q]) / Qscale[q])
         end
     end
-    return (; energy = eE, energy_rel = movedE > 0 ? eE / movedE : eE,
-            entropy = eS, entropy_rel = movedS > 0 ? eS / movedS : eS,
+    # floors: when (almost) nothing moves, measure against the system's own magnitude
+    # (round-off in these closures scales with the magnitudes of U and S themselves)
+    movedE = max(movedE, 1e-3 * max(sum(abs, U0; init = 0.0), floatmin()))
+    movedS = max(movedS, 1e-3 * max(abs(S0), 1.0))
+    return (; energy = eE, energy_rel = eE / movedE,
+            entropy = eS, entropy_rel = eS / movedS,
             charge_rel = eQ)
 end

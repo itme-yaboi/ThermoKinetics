@@ -119,6 +119,45 @@ end
     end
 end
 
+@testset "applications: control mass, piston dynamics" begin
+    @testset "piston–cylinder compression by the atmosphere, with seal friction" begin
+        # a gas in a cylinder (1 bar) is compressed by a 2 kg piston that the atmosphere (3 bar)
+        # pushes in; seal friction damps the oscillation and sends its heat to the wall. The gas
+        # takes no heat and the piston is ideal, so the gas ends exactly on its isentrope at 3 bar,
+        # whatever the dynamics. All the irreversibility is the friction heat.
+        N2 = gas_n2()
+        cp = N2.cv + N2.R
+        A, mp, c, T0, p0, V0, patm, Twall = 0.01, 2.0, 20.0, 300.0, 1e5, 1e-3, 3e5, 300.0
+        sys = ThermoSystem()
+        gas = add!(sys, Body(:gas, N2; T = T0, p = p0, V = V0))
+        pst = add!(sys, Body(:piston, InertialMass(mp); w = 0.0))
+        atm = add!(sys, Reservoir(:atm; p = patm))
+        ground = add!(sys, Reservoir(:ground, Momentum() => 0.0))
+        wall = add!(sys, Reservoir(:wall; T = Twall))
+        connect!(sys, Gyrator(A; a = Volumetric(), b = Momentum()), gas, pst)
+        connect!(sys, Gyrator(-A; a = Volumetric(), b = Momentum()), atm, pst)
+        fr = connect!(sys, Conductor(LinearConductance(Momentum(), c); dissipation = Into(wall)), pst, ground)
+        cs = compile(sys)
+        u0 = initial_state(cs)
+        sol = simulate(cs, (0.0, 10.0))
+        uf = sol.u[end]
+        Tf = T0 * (patm / p0)^(N2.R / cp)
+        @test pressure(cs, uf, gas) ≈ patm rtol = 1e-6
+        @test temperature(cs, uf, gas) ≈ Tf rtol = 1e-6
+        S0 = charges(cs, u0, gas)[1]                                       # no heat, ideal piston: S fixed
+        @test abs(charges(cs, uf, gas)[1] - S0) <= 1e-12 * abs(S0)         # (to the ulps of the implicit steps)
+        m = charges(cs, u0, gas)[3]
+        ΔU = m * N2.cv * (Tf - T0)
+        Watm = -reservoir_ledger(cs, uf, atm).U                            # work done by the atmosphere
+        @test Watm ≈ patm * (V0 - charges(cs, uf, gas)[2]) rtol = 1e-6
+        Qfric = reservoir_ledger(cs, uf, wall).U
+        @test Qfric ≈ Watm - ΔU rtol = 1e-5                                # first law, piston at rest
+        @test generated_entropy(cs, uf)[fr] ≈ Qfric / Twall rtol = 1e-6
+        cl = closure(cs, sol)
+        @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-10
+    end
+end
+
 @testset "applications: control volume" begin
     N2 = gas_n2()
     cp = N2.cv + N2.R

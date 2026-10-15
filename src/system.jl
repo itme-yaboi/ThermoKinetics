@@ -25,7 +25,7 @@ end
 ThermoSystem() = ThermoSystem(MetaGraph(Graph(); label_type = Symbol, vertex_data_type = Any, edge_data_type = Port),
                               Symbol[], Symbol[])
 
-isnode(x) = x isa Body || x isa Reservoir
+isnode(x) = x isa Body || x isa Reservoir || x isa Junction
 
 function _check_new_label(sys::ThermoSystem, name::Symbol)
     haskey(sys.graph, name) && throw(ArgumentError("a vertex named :$name already exists"))
@@ -33,11 +33,11 @@ function _check_new_label(sys::ThermoSystem, name::Symbol)
 end
 
 """
-    add!(sys, body_or_reservoir) -> Symbol
+    add!(sys, node) -> Symbol
 
-Add a node; returns its label.
+Add a node (a `Body`, `Reservoir` or `Junction`); returns its label.
 """
-function add!(sys::ThermoSystem, x::Union{Body,Reservoir})
+function add!(sys::ThermoSystem, x::Union{Body,Reservoir,Junction})
     _check_new_label(sys, x.name)
     sys.graph[x.name] = x
     push!(sys.nodes, x.name)
@@ -111,6 +111,42 @@ function connect!(sys::ThermoSystem, el::Union{FlowBoundary,PassThroughOutlet}, 
                   name::Symbol = _default_name(sys, el))
     _check_node(sys, node)
     return _add_element!(sys, el, name, node => :a)
+end
+
+"""
+    connect!(sys, converter, nodes...; name) -> Symbol
+
+Join a `Converter`'s ports, in order, to distinct nodes (port k is role `:p<k>`).
+"""
+function connect!(sys::ThermoSystem, el::Converter{N}, nodes::Symbol...;
+                  name::Symbol = _default_name(sys, el)) where {N}
+    length(nodes) == N || throw(ArgumentError("this converter has $N ports, got $(length(nodes)) nodes"))
+    allunique(nodes) || throw(ArgumentError("converter ports must be on distinct nodes"))
+    foreach(n -> _check_node(sys, n), nodes)
+    return _add_element!(sys, el, name, (n => Symbol(:p, k) for (k, n) in enumerate(nodes))...)
+end
+
+"""
+    connect!(sys, transformer, a, b; name) -> Symbol
+
+Join a `Transformer` between nodes `a` and `b` (P_a = r P_b).
+"""
+function connect!(sys::ThermoSystem, el::Transformer, a::Symbol, b::Symbol; name::Symbol = _default_name(sys, el))
+    _check_node(sys, a)
+    _check_node(sys, b)
+    a == b && throw(ArgumentError("a transformer needs two distinct nodes"))
+    return _add_element!(sys, el, name, a => :a, b => :b)
+end
+
+"""
+    connect!(sys, switched, nodes...; name) -> Symbol
+
+Connect a `Switched` element exactly as its inner element would be connected.
+"""
+function connect!(sys::ThermoSystem, el::Switched, nodes::Symbol...; name::Symbol = _default_name(sys, el.element))
+    label = connect!(sys, el.element, nodes...; name)
+    sys.graph[label] = el
+    return label
 end
 
 "Label of the node on port `role` of element `el`."
