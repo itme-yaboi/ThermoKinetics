@@ -691,6 +691,12 @@ from their initial values.
   a species, relative to the total mass of the bodies that hold it.
   Species changed by reactions are not each conserved: their element totals are checked
   instead (`element_totals`), in the same `charge_rel`.
+- species: per conserved species (not changed by a reaction), `(; abs, rel)`: the absolute
+  drift max |Δ total_charge| [kg] and that drift relative to the species' own largest body
+  amount. Unlike `charge_rel`, `rel` is not diluted by the rest of the body, so a real loss of
+  a trace species (tritium in water) shows at full size (D-43).
+- elements: when reactions act, per element `(; abs, rel)`: drift [mol] and relative to the
+  element's largest body amount.
 """
 function closure(cs::CompiledSystem, sol)
     u0 = sol.prob.u0
@@ -723,6 +729,7 @@ function closure(cs::CompiledSystem, sol)
     body_elem(u, e) = sum((atom_count(sd, e) / sd.M * body_charge(u, Species(s)) for (s, sd) in cs.species_info); init = 0.0)
     Escale = [max(maximum(body_elem(u, e) for u in sol.u), floatmin()) for e in elems]
     eE = 0.0; eS = 0.0; movedE = 0.0; movedS = 0.0; eQ = 0.0
+    dQ = zeros(length(doms)); dEl = zeros(length(elems))       # absolute drifts
     for u in sol.u
         Ub = [internal_energy(b.material, charges(cs, u, b.name)) for b in cs.bodies]
         dXt = _external_energy_terms(cs, u) .- X0
@@ -738,12 +745,14 @@ function closure(cs::CompiledSystem, sol)
         movedE = max(movedE, sum(abs.(Ub .- U0); init = 0.0) + sum(abs, dXt; init = 0.0) + conv)
         movedS = max(movedS, abs(dS) + sum(abs, dYt; init = 0.0) + abs(dSgen))
         for (q, d) in enumerate(doms)
-            eQ = max(eQ, abs(total_charge(cs, u, d) - Q0[q]) / Qscale[q])
+            dQ[q] = max(dQ[q], abs(total_charge(cs, u, d) - Q0[q]))
+            eQ = max(eQ, dQ[q] / Qscale[q])
         end
         if !isempty(elems)
             el = element_totals(cs, u)
             for (q, e) in enumerate(elems)
-                eQ = max(eQ, abs(el[e] - E0[q]) / Escale[q])
+                dEl[q] = max(dEl[q], abs(el[e] - E0[q]))
+                eQ = max(eQ, dEl[q] / Escale[q])
             end
         end
     end
@@ -751,7 +760,12 @@ function closure(cs::CompiledSystem, sol)
     # (round-off in these closures scales with the magnitudes of U and S themselves)
     movedE = max(movedE, 1e-3 * max(sum(abs, U0; init = 0.0), floatmin()))
     movedS = max(movedS, 1e-3 * max(abs(S0), 1.0))
+    own(d) = max(maximum(body_charge(u, d) for u in sol.u), body_charge(u0, d), floatmin())
+    species = Dict{Symbol,NamedTuple{(:abs, :rel),Tuple{Float64,Float64}}}(
+        d.name => (abs = dQ[q], rel = dQ[q] / own(d)) for (q, d) in enumerate(doms) if d isa Species)
+    elements = Dict{Symbol,NamedTuple{(:abs, :rel),Tuple{Float64,Float64}}}(
+        e => (abs = dEl[q], rel = dEl[q] / Escale[q]) for (q, e) in enumerate(elems))
     return (; energy = eE, energy_rel = eE / movedE,
             entropy = eS, entropy_rel = eS / movedS,
-            charge_rel = eQ)
+            charge_rel = eQ, species, elements)
 end

@@ -6,11 +6,10 @@
 
 - **Repository:** the package is `ThermoKinetics` (D-38), on the private GitHub repository `itme-yaboi/ThermoKinetics` (`origin`). `docs/veinik/` and the Veinik section notes are local only and must never be committed (D-36, D-37).
 - **Phase:** build. DESIGN.md revision 2 is approved. Of the revision 3 additions, mechanics (DESIGN §18) is accepted and built; rockets (§19) are still proposed.
-- **Done:** slices 1–7. Slice 7 was reactions, nuclear and heat sources (D-39, D-40, D-41). The plotting design (DESIGN §17) is written but not built.
-- **Awaiting review:** D-41, the slice 7 deviations. The main one is the trace floor in the mixing entropy, which keeps depleted species from stalling the integrator. The other is the two closure scales.
+- **Done:** slices 1–7. Slice 7 was reactions, nuclear and heat sources (D-39 to D-43, all accepted). The plotting design (DESIGN §17) is written but not built.
 - **Next:** slice 8, rockets (DESIGN §19, D-33; proposed, not reviewed). Slice 7 supplies the gas mixture with formation enthalpies and the reaction element; the limits are in §19.6.
 - **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
-- **Tests:** 192,945 checks pass in ~2.2 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
+- **Tests:** 192,952 checks pass in ~2.3 min (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 
 ## What exists
 
@@ -26,7 +25,7 @@
 | Flow | `Stream`, `IdealPump`, `FlowBoundary`, `PassThroughOutlet` | single species for pumps and boundaries |
 | Switching | `Switched(element; on = t -> Bool)` (also clutches and brakes) | discontinuities as `tstops`; evaluated as left limits |
 | Running | `simulate` (Rodas5P; mass-matrix DAE when junctions or transformers exist; `consistent_state`; inadmissible steps rejected, NaN on invalid trial stages; ledgers error-controlled by default with scaled tolerances, `atol_ledger` override); `steady_state` | tolerances: DESIGN §12.5 |
-| Results | as before, plus `algebraic_index`, `constraint_residual`, `source_ledger`, `reaction_rates`, `element_totals` | closure checks element totals when reactions act |
+| Results | as before, plus `algebraic_index`, `constraint_residual`, `source_ledger`, `reaction_rates`, `element_totals` | closure checks element totals when reactions act; per-species and per-element absolute drift (`closure(...).species`, `.elements`, D-43) |
 | Spatial | `rod!` | |
 
 Validation covered (`test/`):
@@ -81,7 +80,7 @@ Validation covered (`test/`):
 - **Mechanics limits** (DESIGN §18.7): one axis; no 3-D rigid-body rotation (Euler's equations); Coulomb friction regularized, with no true sticking; no lossy (mesh-efficiency) transformer; no linkages or contact.
 - **Mixtures and reactions** (DESIGN §8.1, D-41):
   - constant c_v per species, so high-temperature accuracy is limited (NASA polynomials come with the property backends);
-  - the trace floor: below 1e-13 of a body's mass the mixing term is smoothed, so a depleted species can read about −1e-12 of the body's mass instead of failing (`trace` keyword);
+  - the trace floor: below 1e-13 of a body's mass the mixing term is smoothed, so a depleted species can read about −1e-12 of the body's mass instead of failing (`trace` keyword). When it matters and how to handle it: D-42;
   - mass action needs a body with a volume (gas); a solution uses `AffinityLaw`;
   - no mixture reservoirs or multi-species flow boundaries yet; reacting streams are out of scope;
   - `steady_state` refuses closed reacting groups (their element totals are conserved: the unimplemented constraint-row case); use `simulate`.

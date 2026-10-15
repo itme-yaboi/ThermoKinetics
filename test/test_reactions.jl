@@ -272,6 +272,10 @@
         cs = compile(sys)
         sol = simulate(cs, (0.0, 40.0))
         ncomp = (H2 = 0.0, O2 = n0.O2 - n0.H2 / 2, H2O = n0.H2O + n0.H2, N2 = n0.N2)
+        cl4 = closure(cs, sol)
+        @test collect(keys(cl4.species)) == [:N2]                                 # reacting species are not each conserved …
+        @test Set(keys(cl4.elements)) == Set([:H, :O, :N])                        # … their elements are
+        @test all(v -> v.rel <= 1e-12, values(cl4.elements)) && cl4.species[:N2].rel <= 1e-12
         @test temperature(cs, sol.u[end], :v) ≈ 300.0 rtol = 1e-9
         @test reservoir_ledger(cs, sol.u[end], :bath).U ≈ comb_U(n0, 300.0) - comb_U(ncomp, 300.0) rtol = 1e-7
         cl = closure(cs, sol)

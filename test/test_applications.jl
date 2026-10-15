@@ -570,5 +570,11 @@ end
         @test moles(cs, sol.u[1], :water).HTO ≈ a * nD0 * YEAR rtol = 0.03
         cl = closure(cs, sol)
         @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9 && cl.charge_rel <= 1e-12
+        # per-species closure, not diluted by the water: the tritium inventory is accounted to round-off
+        @test Set(keys(cl.species)) == Set([:H2O, :HDO, :HTO, :He3, :OH])
+        @test cl.species[:HTO].abs <= 1e-15                                       # kg, ≈ eps × 1 kg of water
+        @test cl.species[:HTO].abs == maximum(abs(total_charge(cs, u, Species(:HTO)) - total_charge(cs, sol.prob.u0, Species(:HTO)))
+                                              for u in sol.u)
+        @test isempty(cl.elements)                                                # no reactions here
     end
 end

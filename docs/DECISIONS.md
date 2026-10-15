@@ -561,7 +561,7 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
    - H9 needs a liquid mixture, so slice 7 adds `IdealSolution`: a rigid condensed mixture with ideal mixing, closed-form U(S, m), no new element kind. Alternative: steam as an `IdealGasMixture` (wrong phase for a coolant).
    - Atom symbols carry a nucleon number for the nuclear checks; element symbols use their main isotope's, isotopes their own.
 
-### D-41 Slice 7 implementation: deviations from DESIGN §8.1 — item 1 accepted (user, 2026-10-15, D-42), item 2 for review (slice 7, 2026-10-15); supersedes "every species stays present" in D-39 §3 and D-40 §2
+### D-41 Slice 7 implementation: deviations from DESIGN §8.1 — accepted (user, 2026-10-15, with D-42 and D-43) (slice 7); supersedes "every species stays present" in D-39 §3 and D-40 §2
 1. **Trace floor in the mixing entropy** (the user's condition in D-40 §2: approaching zero must not fail).
    - **Problem, measured:** with exact ideal mixing (n ln n, μ → −∞ as n → 0), a burnt-out reactant whose equilibrium amount is far below round-off sits in round-off noise (≈ 2 eps of the body's mass) at the edge of the valid states. In the H4 calorimeter, 40 % of steps came out slightly negative and were rejected, at any step size, and the run hit MaxIters.
    - **Chosen:** below δ = `trace` × the body's total mass (default 1e-13, a material keyword), n ln n is continued by its second-order Taylor expansion at δ. U stays a convex, C², first-order homogeneous potential, μ is finite for every amount, and mass action uses the matching activity amounts, so A·ξ̇ ≥ 0 and the rate still vanishes at A = 0. The same calorimeter now runs 20 s in 276 steps.
@@ -573,7 +573,7 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 4. **Ledgers and accessors:** heat and nuclear sources are read with `boundary_ledger` (received: −U is the energy supplied). New `reaction_rates` and `element_totals`. `boundary_ledger` with no mass slots no longer fails on an empty sum.
 5. **Steady state:** a reaction does not anchor its species (closed reacting groups conserve element totals, the unimplemented constraint-row case, so `steady_state` refuses them). A nuclear source anchors its species, like a `Source`; a heat source anchors nothing.
 6. **Tests:** H10 runs H6 for 60 half-lives (not 20). At that depth the tritium amount is checked only for |n_T| ≤ 1e-10 n₀ (it is below the solver's absolute tolerance). 08 §H says 60 (user's file, edited with the §H approval).
-- **To review:** item 1 (the floor and its default) and item 2.
+- **To review:** item 1 (the floor and its default) and item 2. *(Answered: item 1 in D-42; item 2 in D-43; the rest accepted.)*
 
 ### D-42 The trace floor: when it matters and how to handle it — accepted (user, 2026-10-15); accepts D-41 §1
 - **Chosen:** the default `trace = 1e-13` stays.
@@ -590,6 +590,14 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
   2. If the species is below even that, model it in its own body (a separate trace inventory, or the stream or volume where it is not swamped), so it is not a 1e-15 fraction of a large body.
   3. When reporting, read a slightly negative amount as zero.
 - **Revisit when** a fusion case needs accurate μ for a species below 1e-15 of its body (e.g. tritium in bulk coolant at those levels): that would need log-amount states, a design change.
+
+### D-43 Closure scales accepted, with a per-species absolute report — accepted (user, 2026-10-15); accepts D-41 §2
+- **Chosen:** D-41 §2 stands (energy against the energy moved including conversion inside bodies; a species against the mass of the bodies holding it). Because the second scale dilutes a real loss of a trace species, `closure` also returns:
+  - `species`: per conserved species, `(; abs, rel)`: the absolute drift [kg], and the drift relative to that species' own largest body amount;
+  - `elements`: when reactions act, per element `(; abs, rel)` [mol].
+- **Why:** `charge_rel` stays a scale-aware summary for pass/fail, and an exact trace inventory (tritium accounting) is checked against itself, not against the body.
+- **Alternatives:** revert to per-species scales (trace species read round-off as drift); leave the check to the user via `total_charge` (easy to forget).
+- **How to use:** for tritium accounting, check `closure(cs, sol).species[:HTO].abs` against an absolute limit (it sits at about eps × the body's mass, e.g. ≤ 1e-15 kg in 1 kg of water).
 
 ---
 
