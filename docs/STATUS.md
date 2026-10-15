@@ -8,9 +8,9 @@
 - **Phase:** build. DESIGN.md revision 2 is approved. Revision 3 is accepted and built: mechanics (DESIGN §18) and rockets (§19).
 - **Done:** slices 1–9, 7a and 10a. Slice 10a was the single-phase real-fluid backend (`RealFluid` through Clapeyron, a package extension; D-50, D-51 for review). Slice 9 was cycles E3 (Veinik's rectangular cycle) and E4 (Otto) (D-49). Slice 8 was rockets (D-33, D-47, D-48). Slice 7 was reactions, nuclear and heat sources (D-39 to D-44). Slice 7a is the HTML documentation (D-45): build with `julia --project=docs docs/make.jl`, open `docs/build/index.html`. The plotting design (DESIGN §17) is written but not built.
 - **Future work noted (D-48):** a finite-rate or two-zone rocket chamber, so the combustion loss is booked on the reaction rather than the injectors; a check valve for pressure-fed feeds.
-- **Next:** slice 10b, two-phase pure fluids and Rankine (scope proposed in DESIGN §2.6, D-52, for review); then the plotting track.
-- **Open for review:** D-51 items 3, 5, 8 (per-material warm start, the dome guard for pure fluids only, the Clapeyron name clash).
-- **Real fluids:** `using ThermoKinetics, Clapeyron` loads the backend; helium `GERG2008(["helium"])`, CO₂ `SingleFluid("carbon dioxide")`, water `IAPWS95()`, air `GERG2008(["nitrogen", "oxygen", "argon"])`. Clapeyron also exports `pressure`, `temperature`, `internal_energy`: qualify them as `ThermoKinetics.pressure` etc. First compilation is slow (minutes).
+- **Next:** slice 10b, two-phase pure fluids and Rankine (DESIGN §2.6, D-52, accepted); then the plotting track.
+- **Future option noted (D-51):** a phase check for mixtures (compressed or subcooled systems).
+- **Real fluids:** `using ThermoKinetics, Clapeyron` loads the backend; helium `GERG2008(["helium"])`, CO₂ `SingleFluid("carbon dioxide")`, water `IAPWS95()`, air `GERG2008(["nitrogen", "oxygen", "argon"])`. Load it with `using ThermoKinetics; import Clapeyron` (no run-time cost) and write `Clapeyron.GERG2008(...)` etc.: Clapeyron also exports `pressure`, `temperature`, `internal_energy`, so `using` both makes those ambiguous. First compilation is slow (minutes).
 - **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.
 - **Tests:** 208,839 checks pass in ~7.3 min (about half of it compiling the Clapeyron backend) (`julia --project=. -e 'using Pkg; Pkg.test()'`). The first run after a dependency change also precompiles packages, which takes a few minutes.
 

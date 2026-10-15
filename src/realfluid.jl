@@ -5,8 +5,11 @@
 """
     RealFluid(model; species)
 
-A real-fluid material from a Clapeyron.jl equation of state (available after
-`using ThermoKinetics, Clapeyron`; the backend is a package extension, D-50). `model` is any
+A real-fluid material from a Clapeyron.jl equation of state (available once Clapeyron is
+loaded; the backend is a package extension, D-50). Load it as `using ThermoKinetics;
+import Clapeyron` and write `Clapeyron.IAPWS95()` etc.: Clapeyron also exports `pressure`,
+`temperature` and `internal_energy`, which `using` both would make ambiguous; `import` costs
+nothing at run time. `model` is any
 Clapeyron `EoSModel` (`GERG2008(["helium"])`, `SingleFluid("carbon dioxide")`, `IAPWS95()`, a
 mixture such as `GERG2008(["nitrogen", "oxygen", "argon"])`); `species` names its components
 (a Symbol, or one Symbol per component, in the model's order).

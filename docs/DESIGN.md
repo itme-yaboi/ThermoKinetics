@@ -177,7 +177,7 @@ Real-fluid models are explicit in (T, ρ). **Clapeyron.jl is the first backend**
   - **a simple supercritical CO₂ Brayton cycle** near the critical point, the same way;
   - **a superheated-steam expansion** in a turbine (single phase) vs. Çengel's tables.
 
-### 2.6 Slice 10b detail: two-phase pure fluids and the Rankine cycle (proposed, 2026-10-15, D-52; not reviewed)
+### 2.6 Slice 10b detail: two-phase pure fluids and the Rankine cycle (accepted 2026-10-15, D-52)
 
 **Two-phase states of a pure `RealFluid` (§2.4 item 7).** A one-component body whose (s, v) lies in the dome is a saturated mixture; its state function stays U(S, V, m), behind the same `forces` interface.
 - **Saturation at T:** the liquid and vapour molar volumes v_l(T), v_v(T) solve p(T, v_l) = p(T, v_v) and μ(T, v_l) = μ(T, v_v), from the volume-based Helmholtz energy alone; Clapeyron's `saturation_pressure` gives the start, then Newton on these two equations (and one Newton step per dual level, IFT, for the derivatives).
@@ -675,7 +675,7 @@ still sound.
 10. **Slice 10a — ✅ done 2026-10-15** (D-50; deviations D-51): the single-phase Clapeyron backend (§2.4, §2.5).
    - `RealFluid(model; species)` in the package extension `ext/ThermoKineticsClapeyronExt.jl` (Clapeyron a weak dependency); the safeguarded Newton inversion with implicit-function derivatives at every nesting level; the dome guard; `isentropic_state` for pure fluids and mixtures; multi-species ideal pumps; datum classes per material.
    - Tests: forces, volume, entropy and energy vs. Clapeyron's (p, T) route at random states of helium, CO₂ (incl. near-critical), water (liquid and vapor) and air; homogeneity, Hessian symmetry and C_v, exact Jacobians vs. finite differences, guards, isentropic states, the datum rule, reference values; applications: Çengel Example 9-6 (air Brayton), helium and sCO₂ Brayton loops vs. a hand calculation, Çengel Example 7-5 (steam turbine).
-10b. **Slice 10b — next: two-phase pure fluids and Rankine** (§2.4 item 7, §2.6; D-52, proposed): the (s, v)-flash for a pure fluid, phase-selective draws on streams and pumps, the Rankine cycle vs. Çengel Example 10-1.
+10b. **Slice 10b — next: two-phase pure fluids and Rankine** (§2.4 item 7, §2.6; D-52, accepted): the (s, v)-flash for a pure fluid, phase-selective draws on streams and pumps, the Rankine cycle vs. Çengel Example 10-1.
 11. **Then:** the plotting track (§17, to be refreshed for the element kinds of slices 6–8 first), and later (order to be agreed): two-phase flash, the momentum vector domain, inertance-driven streams, 3-D rigid-body rotation (§18.7), the D-48 future work.
 
 ## 16. Review record (revision 1 questions)

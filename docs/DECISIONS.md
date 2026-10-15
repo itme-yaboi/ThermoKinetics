@@ -649,7 +649,7 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 - **Volume-based Helmholtz only (user, noted):** inside `RealFluid` the only Clapeyron entry point is `eos(model, V, T, n)` and its AD derivatives; Clapeyron's (p, T)-based property functions (`entropy(model, p, T)`, `volume(model, p, T)`, …) are used only by tests, as an independent check.
 - **Scope (user):** DESIGN §2.5 approved as proposed. Added during the build: the ideal pump handles multi-species fluids whose material provides a multi-species isentropic state (air is the three-species GERG-2008 mixture: Clapeyron has no pseudo-pure air).
 
-### D-51 Slice 10a implementation: deviations and findings — proposed for review (slice 10a, 2026-10-15)
+### D-51 Slice 10a implementation: deviations and findings — accepted (user, 2026-10-15; see the review note) (slice 10a)
 1. **Where Clapeyron's (p, T) routines are used.** The state function uses only `eos(model, V, T, n)` (D-50). Two helpers call Clapeyron's stable-root `volume(model, p, T, z)` to pick a branch, never to define a state: `charges_at(…; p)` (building a body from T and p) and the isentropic state's branch locator (a bracketed 1-D solve in T along the isobar), which is then polished on the volume-based equations alone. Both call it for one mole of the composition and scale the result: for compressed liquid water at ~1e-4 mol it returns NaN.
 2. **The temperature bracket stays inside the model's monotone range** (∂S/∂T > 0, finite): below it (e.g. under CO₂'s triple point) an equation of state extrapolates wildly and S(T) turns. A bracketing step that lands outside is shrunk, not taken (near the critical point a full step can jump into the dome).
 3. **The warm start is per material, not per body** (DESIGN §2.4 said per body): a `Ref` in the material, shared by the bodies made of it. Any start converges; this one is simpler.
@@ -661,13 +661,13 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 9. **Compile cost:** nested ForwardDiff types through a Clapeyron model compile slowly: the real-fluid tests take ~4 min the first time (99 % compilation), the Brayton applications ~3 min. Run time after compilation is small.
 10. **Textbook tolerance:** Çengel Example 7-5's h₂ comes from linear interpolation in s between table rows; h(s) is convex along an isobar, so it overestimates h₂ by ~1 kJ/kg and the work by ~0.3 % (IAPWS-95: 350.9 kJ/kg vs. 349.8). The test uses 5e-3 and says why.
 - **Built with:** the kernel tests by a Sonnet subagent (reviewed: one isentropic case ended inside the dome and was moved; the datum case used two names for one equation and was changed to a cubic; the mixture isentropic call needed its composition); the backend, the application tests and the hand calculations directly.
-- **To review:** items 3, 5 and 8.
+- **To review:** items 3, 5 and 8. *(User, 2026-10-15: item 3 accepted. Item 5 accepted for now; add later an option to check a mixture's phase too, for compressed or subcooled systems and other cases where it matters. Item 8: `import Clapeyron` (not `using`) loads the extension the same way and costs nothing at run time, since qualified names resolve at compile time; so the documented pattern is `using ThermoKinetics; import Clapeyron`, with `Clapeyron.`-qualified model constructors. No renaming.)*
 
-### D-52 Slice 10b scope: two-phase pure fluids, phase-selective draws, Rankine — proposed (2026-10-15; DESIGN §2.6; not reviewed)
+### D-52 Slice 10b scope: two-phase pure fluids, phase-selective draws, Rankine — accepted (user, 2026-10-15; DESIGN §2.6)
 1. **The flash for pure fluids only:** (s, v) → (T, x) by the lever rule (one equation in T), with saturation from p and μ equality on the volume-based Helmholtz energy; IFT derivatives as in 10a. Alternative: Clapeyron's own flash routines inside the state function (would break the volume-based-only rule, D-50, and their derivatives are not IFT-exact).
 2. **Phase-selective draws (a design addition):** a `draw = :mixture | :liquid | :vapor` option on `Stream` and `IdealPump`. Needed for any physical Rankine model: the condenser is two-phase (its pressure is p_sat(T)), but the feed pump takes liquid. Alternatives: (a) separate liquid and vapour bodies with a phase-change conductor between them (two states, a kinetic interface law; more physics, more parameters); (b) a subcooled-liquid condenser body (single phase, but its pressure would then be set by liquid compressibility, not by saturation: wrong); (c) a separator element (a new element kind for what an option does).
 3. **Tests:** water and CO₂ in the dome vs. Clapeyron's saturation properties; Çengel Examples 3-6 (rigid-vessel cooling into the dome) and 10-1 (simple ideal Rankine).
-- **To review:** item 2 (the draw option versus a separator element or two-body phase change) and the scope as a whole.
+- **Review (user):** the scope and the `draw` option are accepted, with `:mixture` the default. A real plant has a trap that keeps vapour out of the feed pump, and the simulation should reflect it; keeping `:mixture` available is wanted, to model the trap failing.
 
 ---
 
