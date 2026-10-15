@@ -72,6 +72,20 @@ DESIGN.md describes the target. STATUS.md and the code say what exists. When the
 
 The author previously built a Julia thermal library (ThermalModeling / TSM), a conventional lumped-element code built on ModelingToolkit. That dependency proved a major and nearly irreversible mistake, which is why this project uses no ModelingToolkit (D-2). The old code is **not** a reference for this project and is not consulted. If a specific piece might help (a heat-transfer or friction correlation, a property wrapper, a validated case for the regression comparison in `08` §F), ask the author rather than looking for it.
 
+## Textbooks for examples and validation
+
+`_reference/verification/` holds textbooks the author has read (local only, git-ignored, D-46). Use them to **set up example problems and validation cases**: problem statements, worked examples, property values and published answers to check the library against. They are not a source for the framework's physics or code; `docs/veinik/` and DESIGN remain that. When a test or example uses one, cite it in a comment by book, section and problem or example number (e.g. `# Çengel 9e Example 10-1`), and never copy its text, figures or tables into the repository (re-derive or re-key only the numbers the case needs).
+
+| Book | Use it for |
+|---|---|
+| Çengel, Boles & Kanoğlu, *Thermodynamics: An Engineering Approach*, 9e | cycles (Rankine, Brayton, Otto, refrigeration), control-volume and control-mass problems, exergy, property tables |
+| Incropera et al., *Fundamentals of Heat and Mass Transfer* | conduction (steady, transient, fins), convection correlations, radiation, heat exchangers, diffusion |
+| Beer & Johnston, *Vector Mechanics for Engineers: Dynamics* | translational and rotational dynamics, vibrations |
+| Esfandiari & Lu, *Modeling and Analysis of Dynamic Systems* | multi-domain lumped models: mechanical, electrical, fluid, thermal, electromechanical |
+| Seborg et al., *Process Dynamics and Control*; *Chemical Process Dynamics and Controls* | reactors, tanks, process dynamics, control loops |
+| Spong et al., *Robot Modeling and Control* | multibody and rotational mechanics, actuators |
+| Glukhikh et al., *Fundamentals of Magnetic Thermonuclear Reactor Design* | fusion-system cases: blanket, tritium, heat loads, balance of plant |
+
 ## Network plotting reference
 
 Network plotting (DESIGN §17, track P; not implemented yet) **must** use the compact orthogonal node-placement algorithm of Freivalds & Glagoļevs, *Graph Compact Orthogonal Layout Algorithm*: `_reference/graphing/Freivalds, Graph Compact Orthogonal Layout Algorith.pdf` (12 pages, with Algorithm 1 on p. 7). Read it, and DESIGN §17, before implementing any plotting.

@@ -11,6 +11,8 @@ _reference/veinik_source/notes_by_section_*.md
 docs/veinik/
 # copyrighted papers: local only (D-30)
 _reference/graphing/*.pdf
+# the user's textbooks for examples and validation: local only (D-46)
+_reference/verification/
 # personal Claude Code settings
 .claude/settings.local.json
 docs/build/

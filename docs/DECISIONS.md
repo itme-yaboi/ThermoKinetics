@@ -614,6 +614,10 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 - **Alternatives:** a separate `human_docs/` folder (non-standard, tooling expects `docs/`); a docs branch (only useful for GitHub Pages deployment); hand-written HTML (no docstring extraction, drifts from the code).
 - **Built with:** the Documenter setup, API pages and examples by a Sonnet subagent, reviewed and corrected (an example compared a production rate with an integrated value; misfiled API entries); the architecture page and the missing docstrings directly.
 
+### D-46 The author's textbooks for examples and validation are local only — accepted (user, 2026-10-15)
+- **Chosen:** `_reference/verification/` (textbooks the author has read) is git-ignored as a whole. They are used to set up example problems and validation cases, cited by book, section and problem number; their text, figures and tables are never copied into the repository. They are not a source for the framework's physics or code (`docs/veinik/` and DESIGN are). The list and the use of each book are in CLAUDE.md.
+- **Alternatives:** track them (copyrighted, D-25/D-30/D-36 precedent); ignore per file type (the folder holds `.pdf` and `.PDF`; a folder rule also covers future additions).
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)
