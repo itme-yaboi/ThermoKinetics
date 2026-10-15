@@ -681,9 +681,11 @@ function compile(sys::ThermoSystem)
                 c = CompiledStream(e, el.driver, ia, ib, force_index(ia, Volumetric()), force_index(ib, Volumetric()),
                                    fa, fb, ca, cb, ya, ntuple(k -> yindex(ib, sp[k]), N), wa, wb, cwa, cwb, first(r))
             else
-                N == 1 || throw(ArgumentError("ideal pump :$e: single-species fluids only (for now)"))
                 up = node_obj(ia)
                 mat = fluid_material(up.material)
+                (N == 1 || mixture_isentropic(mat)) ||
+                    throw(ArgumentError("ideal pump :$e: a multi-species fluid needs a material with a mixture isentropic state " *
+                                        "(a RealFluid); $(typeof(mat)) has none"))
                 c = CompiledPump(e, el.mdot, mat, ia, ib, force_index(ib, Volumetric()), fa, fb, ca, cb, ya,
                                  wa, wb, cwa, cwb, first(r))
                 work_led[e] = first(r) + 1
@@ -1068,18 +1070,18 @@ function transfer(c::CompiledPump{F,M,N}, P, u, cs::CompiledSystem, t) where {F,
     J = SVector{N}(ntuple(k -> mdot * y[k], Val(N)))
     Js = mdot * s_a
     Ta, Tb = _node_T(P, cs, c.a), _node_T(P, cs, c.b)
-    st = isentropic_state(c.mat, s_a, -P[c.pb])      # the fluid's internal state, frame-free
+    st = isentropic_state(c.mat, s_a, -P[c.pb], y)   # the fluid's internal state, frame-free
     # between moving bodies: momentum ṁ w_a moves too, and the delivered μ is seen in b's frame
     w_a = c.wa == 0 ? zero(Ta) : P[c.wa]
     w_b = c.wb == 0 ? zero(Tb) : P[c.wb]
     Jp = mdot * w_a
-    μ_del = st.μ - w_b^2 / 2
+    μ_del = ntuple(k -> (st.μ isa Tuple ? st.μ[k] : st.μ) - w_b^2 / 2, Val(N))
     E_a = sum(ntuple(k -> P[c.fa[k]] * J[k], Val(N))) + Ta * Js + w_a * Jp
-    E_star = μ_del * mdot + st.T * Js + w_b * Jp
+    E_star = sum(ntuple(k -> μ_del[k] * J[k], Val(N))) + st.T * Js + w_b * Jp
     W = E_star - E_a
     Q_a = -Ta * Js
     Q_b = E_star - sum(ntuple(k -> P[c.fb[k]] * J[k], Val(N))) - w_b * Jp
-    S_gen = (sum(ntuple(k -> (μ_del - P[c.fb[k]]) * J[k], Val(N))) + Js * (st.T - Tb)) / Tb
+    S_gen = (sum(ntuple(k -> (μ_del[k] - P[c.fb[k]]) * J[k], Val(N))) + Js * (st.T - Tb)) / Tb
     return (; mdot, J, Js, J_p = Jp, W, Q_a, Q_b, T_a = Ta, T_b = Tb, T_star = st.T, S_gen, parts = (; total = S_gen))
 end
 
@@ -1359,18 +1361,19 @@ end
 
 """
 Species data of every body's species, by name; one name must mean the same atoms and molar mass.
-A species held both by a material with species data and by one without (an `IdealGas`) is
-refused: their energy and entropy datums differ, so the μ they exchange would not be one force.
+A species held by materials of different datum classes (`datum_class`: an `IdealGas`, species
+data, a Clapeyron backend) is refused: their energy and entropy datums differ, so the μ they
+exchange would not be one force (D-48, D-50).
 """
 function _species_info(slots)
     info = Dict{Symbol,SpeciesData}()
-    plain = Set{Symbol}()
+    classes = Dict{Symbol,Set{Any}}()
     for s in slots
         mat = s.body.material
-        if trace_floor(mat) === nothing
-            foreach(d -> d isa Species && push!(plain, d.name), domains(mat))
-            continue
+        for d in domains(mat)
+            d isa Species && push!(get!(classes, d.name, Set{Any}()), datum_class(mat))
         end
+        trace_floor(mat) === nothing && continue
         for name in species_names(mat)
             sd = species_data(mat, name)
             sd === nothing && continue
@@ -1383,10 +1386,11 @@ function _species_info(slots)
             end
         end
     end
-    both = intersect(plain, keys(info))
-    isempty(both) ||
-        throw(ArgumentError("species $(collect(both)) is held both by a material with species data and by one without " *
-                            "(e.g. IdealGas): their datums differ. Use IdealGasMixture(SpeciesData) for every body holding it"))
+    for (name, cl) in classes
+        length(cl) > 1 &&
+            throw(ArgumentError("species :$name is held by materials with different datums ($(collect(cl))): the μ they " *
+                                "exchange would not be one force. Use one kind of material (one backend) for every body holding it"))
+    end
     return info
 end
 

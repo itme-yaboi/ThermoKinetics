@@ -30,6 +30,8 @@ Files are included in this order by `src/ThermoKinetics.jl`:
 | `system.jl` | The model graph | [`ThermoSystem`](@ref) (a `MetaGraphsNext` bipartite graph), [`add!`](@ref), [`connect!`](@ref), port roles. |
 | `assembly.jl` | Compilation and the right-hand side | [`compile`](@ref) → [`CompiledSystem`](@ref); the compiled element structs; `transfer` and `_apply!` per element kind; the conductor kernels; `assemble!`; the Jacobian sparsity pattern. |
 | `solve.jl` | Running and results | [`simulate`](@ref), [`steady_state`](@ref), tolerances (`abstol_vector`), accessors ([`flux`](@ref), [`mass_flow`](@ref), [`reaction_rates`](@ref), …), ledgers, [`closure`](@ref). |
+| `realfluid.jl` | Real-fluid hooks | the [`RealFluid`](@ref) constructor (its methods live in the extension), datum classes, mixture isentropic states. |
+| `ext/ThermoKineticsClapeyronExt.jl` | The Clapeyron backend (a package extension, loaded with `using Clapeyron`) | the real-fluid material: the volume-based Helmholtz energy, the safeguarded Newton inversion for T with implicit-function derivatives, the dome guard, isentropic states. |
 | `spatial.jl` | Mesh helpers | [`rod!`](@ref): a 1-D finite-volume chain of bodies and conductors. |
 
 ## From model to results
@@ -191,6 +193,7 @@ species that reactions change. It also reports each species' and element's absol
 | `test_kinetic.jl`, `test_cycles.jl`, `test_mechanics.jl` | converters, DAEs and switching; Carnot cycles; mechanics |
 | `test_reactions.jl` | mixtures, reactions, nuclear and heat sources |
 | `test_rockets.jl` | moving bodies, momentum streams and pumps, the nozzle, gravity on variable mass |
+| `test_realfluid.jl` | the Clapeyron backend vs. Clapeyron's own (p, T) route; derivatives, guards, isentropic states |
 | `test_applications.jl` | one application test per delivered use (walls, vessels, tanks, heat exchangers, circuits, mechanics, internal heating, equilibrium, tritium, rockets) |
 
 Every integration test also checks [`closure`](@ref).

@@ -33,6 +33,7 @@ include("domains.jl")
 include("materials.jl")
 include("species.jl")
 include("moving.jl")
+include("realfluid.jl")
 include("elements.jl")
 include("reactions.jl")
 include("system.jl")
@@ -48,7 +49,7 @@ export Material, ConstantCapacitySolid, IdealGas, ElasticVolume, LinearCapacitor
        LinearInductor, LinearSpring, TorsionSpring, PendulumPotential, Composite, EntropicCharge,
        domains, internal_energy, forces, eos_matrix, temperature, pressure, charges_at,
        capacity_matrix, is_stable, valid_state, mass_slots,
-       SpeciesData, IdealGasMixture, IdealSolution, molar_mass, nucleons, species_names, species_data, Moving
+       SpeciesData, IdealGasMixture, IdealSolution, molar_mass, nucleons, species_names, species_data, Moving, RealFluid
 # elements
 export Body, Reservoir, ThermalConductance, VolumeConductance, LinearConductance, Resistor, MassConductance,
        ThermoelectricConductance, KnudsenBarrier, OnsagerConductance, Conductor, Split, Into, InternalNode,

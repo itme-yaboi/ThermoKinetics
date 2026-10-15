@@ -885,3 +885,126 @@ end
     cl = closure(cs, sol)
     @test cl.energy_rel <= 1e-6 && cl.entropy_rel <= 1e-9
 end
+
+@testset "applications: real-fluid Brayton cycles and a steam turbine (slice 10a)" begin
+    # Independent reference: Clapeyron's own pressure-based property functions, with an isentropic
+    # temperature found here by bisection on Clapeyron.entropy(model, p, T, z). The library goes
+    # through the volume-based Helmholtz energy and its own inversion (D-50).
+    clz(f, y) = (n = collect(y) ./ collect(Clapeyron.mw(f.model) ./ 1000); n ./ sum(n))
+    Mbar(f, z) = sum(z .* collect(Clapeyron.mw(f.model) ./ 1000))
+    h_pT(f, p, T, z) = Clapeyron.enthalpy(f.model, p, T, z) / Mbar(f, z)
+    s_pT(f, p, T, z) = Clapeyron.entropy(f.model, p, T, z) / Mbar(f, z)
+    function T_isentropic(f, s, p, z; lo = 100.0, hi = 3000.0)
+        for _ in 1:200
+            mid = (lo + hi) / 2
+            s_pT(f, p, mid, z) > s ? (hi = mid) : (lo = mid)
+        end
+        return (lo + hi) / 2
+    end
+
+    "Closed Brayton loop: a cold body (compressor inlet) and a hot body (turbine inlet), an ideal
+    compressor cold → hot and an ideal turbine hot → cold at the same ṁ, and the two bodies on
+    reservoirs at T1 and T3 through stiff conductances. Returns rates at the relaxed state."
+    function brayton(f, T1, p1, T3, rp, y; mdot = 0.01, V = 0.05, G = 1e5)
+        m = y isa Real ? 1.0 : NamedTuple{f.names}(Tuple(y))
+        Ec = charges_at(f; T = T1, p = p1, m = m)
+        Eh = charges_at(f; T = T3, p = rp * p1, m = m)
+        sc, sh = V / Ec[2], V / Eh[2]                            # scale both to volume V
+        sys = ThermoSystem()
+        add!(sys, Body(:cold, f, Ec .* sc))
+        add!(sys, Body(:hot, f, Eh .* sh))
+        add!(sys, Reservoir(:sink; T = T1))
+        add!(sys, Reservoir(:source; T = T3))
+        connect!(sys, Conductor(ThermalConductance(G)), :sink, :cold; name = :cooler)
+        connect!(sys, Conductor(ThermalConductance(G)), :source, :hot; name = :heater)
+        connect!(sys, IdealPump(t -> mdot), :cold, :hot; name = :comp)
+        connect!(sys, IdealPump(t -> mdot), :hot, :cold; name = :turb)
+        cs = compile(sys)
+        sol = simulate(cs, (0.0, 20.0); saveat = [20.0])
+        u = sol.u[end]
+        du = rates(cs, u)
+        W = pump_work(cs, du)
+        return (; cs, u, du, Wc = W[:comp], Wt = W[:turb], Qin = -reservoir_ledger(cs, du, :source).U,
+                Qout = reservoir_ledger(cs, du, :sink).U, mdot, cl = closure(cs, sol),
+                T2 = ThermoKinetics._eval(cs, u, :comp).T_star, T4 = ThermoKinetics._eval(cs, u, :turb).T_star)
+    end
+
+    "The same cycle by hand, from the bodies' actual states, with Clapeyron's (p, T) functions only."
+    function by_hand(f, r, y)
+        z = clz(f, y)
+        # qualified: Clapeyron also exports `temperature` and `pressure`
+        T1, p1 = ThermoKinetics.temperature(r.cs, r.u, :cold), ThermoKinetics.pressure(r.cs, r.u, :cold)
+        T3, p3 = ThermoKinetics.temperature(r.cs, r.u, :hot), ThermoKinetics.pressure(r.cs, r.u, :hot)
+        h1, s1 = h_pT(f, p1, T1, z), s_pT(f, p1, T1, z)
+        h3, s3 = h_pT(f, p3, T3, z), s_pT(f, p3, T3, z)
+        T2 = T_isentropic(f, s1, p3, z); T4 = T_isentropic(f, s3, p1, z)
+        h2, h4 = h_pT(f, p3, T2, z), h_pT(f, p1, T4, z)
+        return (; T2, T4, wc = h2 - h1, wt = h3 - h4, qin = h3 - h2, η = ((h3 - h4) - (h2 - h1)) / (h3 - h2))
+    end
+
+    function check_cycle(f, r, hd; Tsink, rtol = 1e-6)
+        @test r.Wc ≈ r.mdot * hd.wc rtol = rtol                  # compressor work, isentropic
+        @test -r.Wt ≈ r.mdot * hd.wt rtol = rtol                 # turbine work (negative: an ideal turbine)
+        @test r.T2 ≈ hd.T2 rtol = 1e-8
+        @test r.T4 ≈ hd.T4 rtol = 1e-8
+        @test r.Qin ≈ r.mdot * hd.qin rtol = rtol                # steady: the heater supplies h3 − h2
+        Wnet = -(r.Wc + r.Wt)
+        @test Wnet ≈ r.Qin - r.Qout rtol = 1e-6                  # first law over the steady loop
+        @test Wnet / r.Qin ≈ hd.η rtol = rtol
+        # loss map: Gouy–Stodola between the two reservoirs, W_Carnot − W = T_sink Σ Ṡ_gen
+        Tsrc = ThermoKinetics.reservoir_force(r.cs.reservoirs[findfirst(==(:source), r.cs.reservoir_names)], Thermal())
+        Sgen = sum(values(entropy_production(r.cs, r.u)))
+        @test r.Qin * (1 - Tsink / Tsrc) - Wnet ≈ Tsink * Sgen rtol = 1e-6
+        @test r.cl.energy_rel <= 1e-6 && r.cl.entropy_rel <= 1e-9
+    end
+
+    @testset "Çengel 9e Example 9-6: ideal Brayton, air, rp = 8, 300 K → 1300 K" begin
+        air = RealFluid(Clapeyron.GERG2008(["nitrogen", "oxygen", "argon"]); species = (:N2, :O2, :Ar))
+        y = (0.7552, 0.2314, 0.0134)                             # dry air, mass fractions
+        r = brayton(air, 300.0, 100e3, 1300.0, 8.0, y)
+        hd = by_hand(air, r, y)
+        check_cycle(air, r, hd; Tsink = 300.0)
+        # vs the textbook (air tables, variable specific heats): T2 = 540 K, T4 = 770 K, rbw = 0.403,
+        # η = 0.426; the bodies sit within ~1 K of 300 K and 1300 K (stiff, not infinite, conductances)
+        @test r.T2 ≈ 540.0 rtol = 1e-2
+        @test r.T4 ≈ 770.0 rtol = 1e-2
+        @test r.Wc / -r.Wt ≈ 0.403 rtol = 1e-2
+        @test -(r.Wc + r.Wt) / r.Qin ≈ 0.426 rtol = 1e-2
+    end
+
+    @testset "closed helium Brayton loop (fusion balance of plant)" begin
+        he = RealFluid(Clapeyron.GERG2008(["helium"]); species = :He)
+        r = brayton(he, 300.0, 3e6, 800.0, 2.5, 1.0)
+        hd = by_hand(he, r, (1.0,))
+        check_cycle(he, r, hd; Tsink = 300.0)
+        k = 5 / 3                                                # helium is nearly ideal: η ≈ 1 − rp^((1−k)/k)
+        @test -(r.Wc + r.Wt) / r.Qin ≈ 1 - 2.5^((1 - k) / k) rtol = 1e-2
+    end
+
+    @testset "simple supercritical CO₂ Brayton cycle near the critical point" begin
+        co2 = RealFluid(Clapeyron.SingleFluid("carbon dioxide"); species = :CO2)
+        r = brayton(co2, 305.0, 7.8e6, 823.0, 2.6, 1.0; V = 0.01)
+        hd = by_hand(co2, r, (1.0,))
+        check_cycle(co2, r, hd; Tsink = 305.0)
+        @test r.Wc / -r.Wt < 0.3                                 # dense near-critical compression: low back work
+    end
+
+    @testset "Çengel 9e Example 7-5: ideal steam turbine, 5 MPa 450 °C → 1.4 MPa" begin
+        water = RealFluid(Clapeyron.IAPWS95(); species = :H2O)
+        sys = ThermoSystem()
+        add!(sys, Body(:inlet, water; T = 723.15, p = 5e6, m = 1.0))
+        add!(sys, Body(:exhaust, water; T = 500.0, p = 1.4e6, m = 1.0))
+        connect!(sys, IdealPump(t -> 1.0), :inlet, :exhaust; name = :turbine)     # 1 kg/s
+        cs = compile(sys)
+        u = initial_state(cs)
+        E = charges(cs, u, :inlet)
+        h1 = (ThermoKinetics.internal_energy(water, E) + 5e6 * E[2]) / E[3]
+        @test h1 ≈ 3317.2e3 rtol = 1e-3                           # Table A-6
+        @test E[1] / E[3] ≈ 6.8210e3 rtol = 1e-3
+        # w = h1 − h2s. The textbook finds h2s by linear interpolation in s between table rows; h(s) is
+        # convex along an isobar, so that overestimates h2s by ~1 kJ/kg (IAPWS-95 gives w = 350.9 kJ/kg)
+        @test -pump_work(cs, rates(cs, u))[:turbine] ≈ 349.8e3 rtol = 5e-3
+        st = ThermoKinetics.isentropic_state(water, E[1] / E[3], 1.4e6)
+        @test 520 < st.T < 550                                    # superheated at 1.4 MPa (T_sat = 468 K): ≈ 262 °C
+    end
+end

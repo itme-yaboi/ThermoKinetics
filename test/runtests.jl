@@ -4,6 +4,7 @@ using Random
 using LinearAlgebra
 using StaticArrays
 using ForwardDiff
+import Clapeyron                       # loads the extension; qualified, since it also exports pressure, temperature, internal_energy
 
 include("helpers.jl")
 
@@ -23,5 +24,6 @@ include("helpers.jl")
     include("test_mechanics.jl")      # slice 6: 08 §G G3, G4, G9; springs, friction laws, sources, gears
     include("test_reactions.jl")      # slice 7: 08 §H H1–H8, H10; mixtures, reactions, nuclear and heat sources
     include("test_rockets.jl")        # slice 8: moving bodies, momentum streams, nozzle, gravity on variable mass
+    include("test_realfluid.jl")      # slice 10a: real fluids through Clapeyron (package extension)
     include("test_applications.jl")   # DESIGN §0.1 application tests
 end

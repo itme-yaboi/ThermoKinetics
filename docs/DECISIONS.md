@@ -649,6 +649,20 @@ Detail of D-11 for the slice. No new element kind: reactions are `InternalTransf
 - **Volume-based Helmholtz only (user, noted):** inside `RealFluid` the only Clapeyron entry point is `eos(model, V, T, n)` and its AD derivatives; Clapeyron's (p, T)-based property functions (`entropy(model, p, T)`, `volume(model, p, T)`, …) are used only by tests, as an independent check.
 - **Scope (user):** DESIGN §2.5 approved as proposed. Added during the build: the ideal pump handles multi-species fluids whose material provides a multi-species isentropic state (air is the three-species GERG-2008 mixture: Clapeyron has no pseudo-pure air).
 
+### D-51 Slice 10a implementation: deviations and findings — proposed for review (slice 10a, 2026-10-15)
+1. **Where Clapeyron's (p, T) routines are used.** The state function uses only `eos(model, V, T, n)` (D-50). Two helpers call Clapeyron's stable-root `volume(model, p, T, z)` to pick a branch, never to define a state: `charges_at(…; p)` (building a body from T and p) and the isentropic state's branch locator (a bracketed 1-D solve in T along the isobar), which is then polished on the volume-based equations alone. Both call it for one mole of the composition and scale the result: for compressed liquid water at ~1e-4 mol it returns NaN.
+2. **The temperature bracket stays inside the model's monotone range** (∂S/∂T > 0, finite): below it (e.g. under CO₂'s triple point) an equation of state extrapolates wildly and S(T) turns. A bracketing step that lands outside is shrunk, not taken (near the critical point a full step can jump into the dome).
+3. **The warm start is per material, not per body** (DESIGN §2.4 said per body): a `Ref` in the material, shared by the bodies made of it. Any start converges; this one is simpler.
+4. **IFT at every nesting level:** solve on the Float64 values, then one Newton step per dual level in that level's number type. Each step starts O(ε) from the root and ε² = 0, so first and second derivatives (forces, Hessians) are exact.
+5. **The dome guard is for pure fluids** (T < T_c and v_l < v < v_v from `saturation_pressure`); mixtures (air) are not checked. An isentropic state whose polish fails (e.g. it lies in the dome) is refused with a `DomainError`.
+6. **Datum classes:** `datum_class(material)` replaces the slice 8 rule (IdealGas vs species data) with one rule for every backend; a RealFluid's class is its Clapeyron model type. Clapeyron's `IAPWS95()` and `SingleFluid("water")` are both `SingleFluid` (the same IAPWS-95 equation and datum), so they agree; a cubic (`PR`) does not.
+7. **Ideal pumps for mixtures:** a pump may move a multi-species fluid when its material provides a mixture isentropic state (`mixture_isentropic`, true for RealFluid); air is the three-species GERG-2008 mixture (no pseudo-pure air in Clapeyron).
+8. **Name clash:** Clapeyron also exports `pressure`, `temperature` and `internal_energy`. With both packages loaded, call `ThermoKinetics.pressure(cs, u, :body)` etc. (or import selectively).
+9. **Compile cost:** nested ForwardDiff types through a Clapeyron model compile slowly: the real-fluid tests take ~4 min the first time (99 % compilation), the Brayton applications ~3 min. Run time after compilation is small.
+10. **Textbook tolerance:** Çengel Example 7-5's h₂ comes from linear interpolation in s between table rows; h(s) is convex along an isobar, so it overestimates h₂ by ~1 kJ/kg and the work by ~0.3 % (IAPWS-95: 350.9 kJ/kg vs. 349.8). The test uses 5e-3 and says why.
+- **Built with:** the kernel tests by a Sonnet subagent (reviewed: one isentropic case ended inside the dome and was moved; the datum case used two names for one equation and was changed to a cubic; the mixture isentropic call needed its composition); the backend, the application tests and the hand calculations directly.
+- **To review:** items 3, 5 and 8.
+
 ---
 
 ## Book versus non-negotiables (CLAUDE.md "How to work" 4)
