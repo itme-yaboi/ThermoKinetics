@@ -7,7 +7,7 @@
 - **Phase:** build. DESIGN.md revision 2 is approved. Of the revision 3 additions, mechanics (DESIGN §18) is accepted and built; rockets (§19) are still proposed.
 - **Done:** slices 1–6. Slice 6 was mechanical and rotational systems (D-32, D-34, D-35). The plotting design (DESIGN §17) is written but not built.
 - **Next:** slice 7, reactions and nuclear sources. Not started; scope and tests are to be detailed at the start of the slice.
-  - It includes a mass-action rate law if that fits A·J ≥ 0 by type; otherwise it goes to future work with the reason (D-34).
+  - It includes a mass-action rate law. Only if that presents an issue does it move to future work, with the issue recorded (D-34).
   - Slice 8 needs an ideal-gas mixture with formation enthalpies from it.
 - **After that:** slice 8, rockets (DESIGN §19, D-33; proposed, not reviewed). The framework can model them; the limits are in §19.6.
 - **Later:** the real-fluid backend (Clapeyron) for Rankine and Brayton; E3/E4; the plotting track; see DESIGN §15.

@@ -545,7 +545,7 @@ still sound.
    - Gears, rack and pinion and clutches use the existing `Transformer` and `Switched`.
    - Tests: 08 §G G1–G9, a random-chain A1/A3 property test, rack and pinion, and a motor with a gearbox.
 7. **Slice 7 — next: reactions and nuclear sources** (§8, D-11). Scope and tests are to be detailed when the slice starts.
-   - It includes a sign-preserving nonlinear (mass-action) rate law alongside the linear affinity law, if it fits A·J ≥ 0 by type; otherwise that goes to future work with the reason (D-34).
+   - It includes a sign-preserving nonlinear (mass-action) rate law alongside the linear affinity law. Only if it presents an issue does it move to future work, with the issue recorded (D-34).
    - Slice 8 needs two things from it: an ideal-gas mixture material with per-species formation enthalpy and standard entropy (so the affinity carries the heat of reaction), and the reaction element.
 8. **Slice 8 — proposed (revision 3, not reviewed): rockets** (§19, D-33). It adds `Moving`, momentum-carrying streams and pumps, `Nozzle`, and a displacement (∫ w dt) ledger on `GravityField` for variable-mass bodies. Tests are in §19.5. It needs slices 6 and 7.
 9. **Later** (order to be agreed with the user): E3 (rectangular cycle; switching and time-varying reservoirs already exist), E4 (Otto), the Clapeyron backend with Newton inversion, two-phase flash, the momentum vector domain, inertance-driven streams, 3-D rigid-body rotation (§18.7).
@@ -954,7 +954,7 @@ with the frozen chamber composition setting k and R (Veinik §59 (448), (453)). 
   - Real performance needs c_p(T) (NASA polynomials) and dissociation species.
   - c_p(T) needs the 1-D Newton inversion of §2.4, planned with the Clapeyron backend. The element interfaces do not change.
 - **Frozen nozzle flow;** no shifting equilibrium.
-- **Not real combustion kinetics.** The linear affinity law J = M_r A/T is right for an equilibrium chamber, but it does not model ignition or kinetics-limited combustion. Those need a sign-preserving nonlinear rate law (mass action: J ∝ 1 − e^(−A/RT), with A·J ≥ 0). That law is planned for slice 7 if it fits (D-34).
+- **Not real combustion kinetics.** The linear affinity law J = M_r A/T is right for an equilibrium chamber, but it does not model ignition or kinetics-limited combustion. Those need a sign-preserving nonlinear rate law (mass action: J ∝ 1 − e^(−A/RT), with A·J ≥ 0). That law is planned for slice 7 (D-34).
 - **Gaseous propellants only,** until the real-fluid backend exists (liquid and cryogenic tanks).
 - **One axis:** vertical ascent, or straight-line flight in free space. Gravity turns and attitude dynamics need vector momentum and rigid-body rotation (§18.7).
 - **No feed-line or injector dynamics, and no combustion instability.** These need inertance (deferred).

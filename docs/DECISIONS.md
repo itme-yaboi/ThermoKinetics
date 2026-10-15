@@ -486,7 +486,7 @@ Each item lists what was built instead of the design text, and why.
   - a frozen nozzle, and an equilibrium chamber rather than combustion kinetics;
   - gaseous propellants until the real-fluid backend;
   - one axis.
-- **To review:** whether slice 6 should support a sign-preserving nonlinear (mass-action) rate law as well as the linear affinity law. A rocket chamber does not need it; ignition and kinetics-limited combustion do. *(Answered in D-34: yes, in the reactions slice, if it fits.)*
+- **To review:** whether slice 6 should support a sign-preserving nonlinear (mass-action) rate law as well as the linear affinity law. A rocket chamber does not need it; ignition and kinetics-limited combustion do. *(Answered in D-34: yes, in the reactions slice; future work only if it presents an issue.)*
 
 ### D-34 Review of revision 3: gravity as a source, special-purpose elements over rule changes, slice order — accepted (user, 2026-10-15)
 - **Working principle (user):** do not sacrifice generality for a specific case. A few explicit, ledgered, special-purpose ("virtual", one-off) components that enable a specific case are preferred to changing the framework's rules to accommodate it. This is recorded in CLAUDE.md "How to work".
@@ -500,7 +500,7 @@ Each item lists what was built instead of the design text, and why.
     - a model needs altitude-dependent gravity;
     - the vehicle's height must be a state rather than a derived ledger.
     - Then weigh relaxing the converter rule (ports on one node with distinct domains; W stays antisymmetric) against a dedicated height element.
-- **Mass-action rate law:** the reactions slice includes a sign-preserving nonlinear (mass-action) rate law alongside the linear affinity law, if it fits the element contract (A·J ≥ 0 by type). If it raises a problem, it goes to future work, with the reason recorded.
+- **Mass-action rate law:** the reactions slice includes a sign-preserving nonlinear (mass-action) rate law alongside the linear affinity law. Only if it presents an issue does it move to future work, with the issue recorded.
 - **Slice order:** mechanics (DESIGN §18) is built first, as slice 6, and merged after the user's approval before the reactions work starts. Reactions and nuclear sources become slice 7, rockets slice 8.
 - **`docs/veinik/08_validation_cases.md`:** the user approved adding the mechanical validation cases there (new §G). The changed lines are reported with the slice.
 
